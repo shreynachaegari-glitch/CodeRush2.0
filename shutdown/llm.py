@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 
 class LLMClient:
@@ -90,6 +91,9 @@ class _RealLLM(LLMClient):
             raise RuntimeError("no API key configured")
 
     def complete(self, prompt: str, *, system: str = "") -> str:
+        return _with_retry(lambda: self._complete_once(prompt, system=system))
+
+    def _complete_once(self, prompt: str, *, system: str = "") -> str:
         if self._kind == "gemini":
             from google.genai import types
 
@@ -117,3 +121,31 @@ class _RealLLM(LLMClient):
             self.last_usage_tokens = (resp.usage.input_tokens or 0) + (resp.usage.output_tokens or 0)
             return resp.content[0].text
         raise RuntimeError("unreachable")
+
+
+def _with_retry(call, *, attempts: int = 3, base_delay: float = 1.5):
+    """A rate limit or network blip mid-run used to crash the whole investigation.
+    Retries transient failures with exponential backoff; a non-transient error
+    (bad request, auth failure) still raises immediately since retrying it
+    would just waste the same call three times."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return call()
+        except Exception as exc:  # provider SDKs raise their own exception types
+            last_exc = exc
+            if not _is_transient(exc) or attempt == attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** attempt))
+    raise last_exc if last_exc is not None else RuntimeError("retry loop exited without a call attempt")
+
+
+def _is_transient(exc: Exception) -> bool:
+    text = str(exc).lower()
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (429, 500, 502, 503, 504):
+        return True
+    return any(marker in text for marker in (
+        "rate limit", "429", "500", "502", "503", "504",
+        "timeout", "timed out", "connection", "temporarily unavailable", "overloaded",
+    ))

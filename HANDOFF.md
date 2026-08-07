@@ -65,6 +65,9 @@ Located in `code rush/shutdown/`:
 | `profiles/communications.json` | The one domain profile (no multi-profile routing) |
 | `held_out_set.json` | 15 labeled cases: 8 self-authored + 7 adapted from public benchmark-style descriptions |
 | `demo_assets/generate_assets.py` | Generates the real demo PDF (with planted prompt-injection) and CSV dataset |
+| `evaluate.py` | Standalone held-out benchmark runner (`python -m shutdown.evaluate`) — no LLM call, no cost, reproducible |
+| `writeup.py` | Regenerates `docs/evaluation_report.md` (narrative prose) from the latest finalized run — `python -m shutdown.writeup` |
+| `tests/` | `unittest` suite covering injection detection, unit normalization, strategy scoring/policy-guard, confidence-update boundaries — `python -m unittest discover -s shutdown/tests -t .` |
 
 **Confirmed working end-to-end with a real Gemini key** (`gemini-flash-latest`, via the current `google-genai` SDK — the old `google.generativeai` package and `gemini-1.5-flash` model are both dead, don't reintroduce them):
 - 3 distinct, falsifiable, domain-appropriate hypotheses generated per run
@@ -83,19 +86,28 @@ Run it: `cd "code rush" && python -m shutdown.main` (needs `.env` with `GEMINI_A
 2. Float-drift at the 0.15 classification boundary (`0.5 - 0.35 = 0.15000000000000002`) caused a misclassification. Fixed: round before threshold checks in both `strategy.py` and `evidence.py`.
 3. `google-generativeai` deprecated, `gemini-1.5-flash` returns 404 — migrated to `google-genai` + `gemini-flash-latest` alias.
 4. `duckduckgo_search` renamed to `ddgs` — added fallback import chain.
-5. Empty/blocked fetches (403s, anti-bot pages) were silently counted as "supports" evidence — now logged as `unknown` and skipped if content is under ~40 chars.
+5. Empty/blocked fetches (403s, anti-bot pages) were silently counted as "supports" evidence — now logged as `unknown` and skipped if content is under ~40 chars, or matches an anti-bot/blocked-access marker regardless of length (see gap #2 fix below).
+
+## Resolved since the list below was first written (2026-08-07)
+
+- **#2 (noisy web evidence)** — `search.py` now filters low-quality/anti-bot search snippets before ranking; `contradiction.py:is_low_quality_content()` catches full fetched pages that survive HTML-stripping with real-looking length (e.g. "ResearchGate — Temporarily Unavailable", "Just a moment... Checking your browser") and logs them as `unknown` instead of `supports`; web evidence confidence is now scaled by the reranked relevance score instead of a flat 0.6.
+- **#6 (stale README)** — rewritten to reflect the actual build, links to `HANDOFF.md` and `docs/`.
+- **#7 (no test suite)** — `shutdown/tests/` (`unittest`, stdlib only) + `shutdown/evaluate.py` (standalone held-out runner, no LLM cost) added.
+- **#8 (no LLM retry handling)** — `llm.py:_with_retry()` wraps every real-provider call with exponential backoff on transient errors (429/5xx/timeout/connection); non-transient errors still raise immediately.
+- **#9 (stale requirements.txt)** — cleaned up to `ddgs`, `python-dotenv`, `google-genai` as real (not commented-out) deps.
+- **#5 (partial)** — `docs/architecture.md` (mermaid diagram + data model), `docs/threat_model.md` (trust boundaries / threats / mitigations table), and `docs/evaluation_report.md` (narrative writeup, regenerate via `python -m shutdown.writeup`) added. Demo recording itself is still outstanding.
 
 ## Known gaps — real next steps, ranked
 
-1. **`browser-use` was never actually integrated.** The plan named it as the one sanctioned external library for browser control; the current implementation uses a plain `requests.get()` fallback instead. If the demo needs live interactive-page browsing (not just static PDF/CSV/search-result fetches), this needs to be wired in.
-2. **Web-search evidence is noisy.** Generic DuckDuckGo results on a niche technical query sometimes return irrelevant/JS-heavy pages that survive HTML-stripping and get logged as "supports" by default (LLM said no contradiction). Not a crash, but a content-quality issue — the PDF/CSV legs are the reliable ones; web search is a noisy bonus leg. Consider domain-restricting search or down-weighting low-quality web evidence.
-3. **Rotate the Gemini API keys.** Two keys were pasted directly into this chat (both now in the transcript) — go to `aistudio.google.com/apikey` and regenerate/delete once done testing. `.env` locally is fine and gitignored; the chat history is not a safe place for a live key.
+1. **`browser-use` was never actually integrated.** The plan named it as the one sanctioned external library for browser control; the current implementation uses a plain `requests.get()` fallback instead. If the demo needs live interactive-page browsing (not just static PDF/CSV/search-result fetches), this needs to be wired in. Deliberately not done yet — heavier install (Playwright browsers), weigh against remaining hackathon time before starting.
+2. ~~Web-search evidence is noisy~~ — resolved, see above. Residual: no hard ceiling on total token/cost spend per run independent of the round cap (see `docs/threat_model.md` T6).
+3. **Rotate the Gemini API keys.** Two keys were pasted directly into an earlier chat (both now in that transcript) — go to `aistudio.google.com/apikey` and regenerate/delete once done testing. `.env` locally is fine and gitignored; chat history is not a safe place for a live key. **Still outstanding — this requires the user, not code.**
 4. **No dry-run/rehearsal of the actual 7-8 minute demo script yet** — approval-gate click timing, narration, the "unscripted second hypothesis" beat from the plan's demo script are not yet tested as a live presentation.
-5. **Submission package deliverables not fully assembled**: a clean one-page architecture diagram (source content exists in the plan file, needs to become an actual visual), a written threat-model doc, a narrative evaluation-report writeup (currently just raw JSON), and the demo recording/script itself.
-6. **`code rush/README.md` is stale** — still has the original pitch doc text from before the build; should be updated to reflect what actually got built, or at minimum link to this HANDOFF.md.
-7. **No automated test suite** — only manual `python -m shutdown.main` smoke runs. A dedicated `evaluate.py` that runs *just* the held-out benchmark (without a full LLM-costing investigation) would be a cleaner "reproducible runner" for the submission's evaluation-report requirement.
-8. **No retry/error handling around LLM calls** — a rate limit or network blip mid-run currently crashes the whole run rather than degrading gracefully.
-9. **`requirements.txt` has commented-out optional deps** — should be cleaned up to reflect what's actually used (`google-genai`, `python-dotenv`, `ddgs`, `PyMuPDF` are all real dependencies now, not optional).
+5. **Demo recording itself** is the one deliverable from the original #5 not yet produced (diagram/threat-model/eval-writeup are done, see above).
+6. ~~README stale~~ — resolved, see above.
+7. ~~No automated test suite~~ — resolved, see above.
+8. ~~No retry/error handling around LLM calls~~ — resolved, see above.
+9. ~~requirements.txt stale~~ — resolved, see above.
 
 ## Operating notes for continuing this in a new chat
 

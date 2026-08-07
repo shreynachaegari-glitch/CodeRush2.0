@@ -92,12 +92,18 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
             hyp = next(h for h in hyps if h.hypothesis_id == step.hypothesis_id)
 
             # -- the PDF spec sheet (with its planted instruction), fetched once, for the demo beat
+            evidence_confidence = 0.6  # default for non-web legs (PDF/CSV/code -- already vetted, not search noise)
             if round_number == 1 and step is plan[0] and SPEC_SHEET_PDF.exists():
                 fetch = contradiction_mod.fetch(str(SPEC_SHEET_PDF))
             else:
                 results = hybrid_search(step.query, max_results=3)
                 top = results[0] if results else None
                 fetch = contradiction_mod.fetch(top.url if top else "https://example.invalid/none")
+                if top:
+                    # web search is the noisiest evidence leg (see HANDOFF known gap #2) --
+                    # scale confidence by how relevant the reranked result actually was
+                    # instead of trusting every hit at the same flat weight.
+                    evidence_confidence = round(0.3 + 0.4 * min(1.0, max(0.0, top.score)), 3)
 
             source_id = evidence_mod.add_source(
                 store, run_id, fetch.content[:200], fetch.source_type, fetch.content,
@@ -110,9 +116,9 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
                                            f"refused: injection detected ({fetch.injection_detail})")
                 continue
 
-            if len(fetch.content.strip()) < 40:
-                # empty/blocked fetch (e.g. a 403 or an anti-bot page) has no content to
-                # actually check -- log it as unknown, don't silently count it as support
+            if len(fetch.content.strip()) < 40 or contradiction_mod.is_low_quality_content(fetch.content):
+                # empty/blocked fetch (e.g. a 403, anti-bot page, or "enable cookies" wall) has
+                # no content to actually check -- log it as unknown, don't silently count it as support
                 evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, "unknown", None, 0.0,
                                            "fetch returned no usable content")
                 continue
@@ -120,7 +126,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
             contradicts, cls, reason = contradiction_mod.detect_contradiction(llm, hyp.statement, fetch.content)
             _track_cost(store, run_id, llm)
             relation = "refutes" if contradicts else "supports"
-            evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, relation, cls, 0.6, reason or "search result")
+            evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, relation, cls, evidence_confidence, reason or "search result")
             new_conf = evidence_mod.update_confidence(store, hyp.hypothesis_id, relation)
             hyp.confidence_current = new_conf
             if contradicts:

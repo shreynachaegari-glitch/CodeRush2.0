@@ -12,6 +12,8 @@ import math
 import re
 from dataclasses import dataclass
 
+from .contradiction import is_low_quality_content
+
 
 @dataclass
 class SearchResult:
@@ -76,10 +78,28 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
-def hybrid_search(query: str, max_results: int = 8) -> list[SearchResult]:
-    candidates = _duckduckgo(query, max_results=max_results)
+# Boilerplate/anti-bot snippets that survive DuckDuckGo's own filtering but
+# carry no real content -- filtered out before ranking rather than left for
+# the contradiction hunter to guess about. Same marker list the contradiction
+# hunter uses on full fetched pages (see contradiction.is_low_quality_content),
+# applied here to the shorter search snippet.
+def _is_low_quality(r: SearchResult) -> bool:
+    snippet = (r.snippet or "").strip()
+    if len(snippet) < 25:
+        return True
+    return is_low_quality_content(snippet)
+
+
+def hybrid_search(query: str, max_results: int = 8, min_score: float = 0.05) -> list[SearchResult]:
+    """Keyword search + dense rerank, then drop noisy/boilerplate results
+    instead of letting them silently count as evidence. `min_score` is a
+    relevance floor on the reranked cosine score -- a result scoring near
+    zero shares almost no vocabulary with the query and is more likely to be
+    an irrelevant page than real disagreement."""
+    candidates = [r for r in _duckduckgo(query, max_results=max_results) if not _is_low_quality(r)]
     q_vec = _hash_embed(query)
     for r in candidates:
         r.score = _cosine(q_vec, _hash_embed(r.title + " " + r.snippet))
     candidates.sort(key=lambda r: r.score, reverse=True)
-    return candidates
+    filtered = [r for r in candidates if r.score >= min_score]
+    return filtered or candidates  # never return nothing just because everything scored low

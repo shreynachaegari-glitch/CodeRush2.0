@@ -12,9 +12,18 @@
 - **Track/Theme:** Track 1 — Agentic Ecosystem
 - **Problem Statement:** AE-02 — Self-evolving autonomous research agent
 
-## Project Description
+## Status
 
-Locking this now — but with real edits, not a rubber stamp. The good news: this version's core insight (replanning as the hero mechanic, not just attack agents) is genuinely stronger and maps even more literally to AE-02's language than what we had. The bad news: the stack list (Neo4j + Docker + React Flow + Cytoscape.js + ChromaDB + LangGraph + 6 retrieval source types) is scope creep back toward ARES-level ambition. We will not stand all of that up and have it work live. Here's the synthesis — keep the mechanic, cut the infra.
+Core pipeline is **built and verified end-to-end** against a live Gemini key (`shutdown/`), with an offline MockLLM path for reproducible testing without API cost. For the full current build state, known gaps, and operating notes for continuing this work, see [`HANDOFF.md`](HANDOFF.md) — it is the source of truth and is kept more current than this file.
+
+Quick start:
+```
+pip install -r requirements.txt
+# .env with GEMINI_API_KEY=... for a live run, or omit it to use MockLLM
+python -m shutdown.main          # full end-to-end demo run
+python -m shutdown.evaluate      # held-out benchmark only, no LLM cost
+python -m unittest discover -s shutdown/tests -t .   # unit tests
+```
 
 ### Shutdown — Adaptive Falsification Engine
 
@@ -119,18 +128,24 @@ Investigation Planner       → decides which evidence types are needed, in what
 
 ## Technical Stack
 
-List the technologies used in this project:
-
-- Frontend: (e.g., React, Next.js, Tailwind)
-- Backend: (e.g., Node.js, FastAPI, Go)
-- Database: (e.g., PostgreSQL, MongoDB, Supabase)
-- Tools/APIs: (e.g., Clerk, Stripe, Gemini API)
+- **Language/runtime:** Python 3.11+, stdlib `sqlite3` (WAL mode, single-writer lock) — no external database
+- **LLM:** Google Gemini (`gemini-flash-latest` via `google-genai`), with pluggable OpenAI/Anthropic dispatch and an offline `MockLLM` for cost-free testing (`shutdown/llm.py`)
+- **Retrieval:** DuckDuckGo keyword search (`ddgs`) + a local hash-embedding cosine rerank for hybrid retrieval, with a noisy/boilerplate-result filter (`shutdown/search.py`)
+- **Document ingestion:** PyMuPDF for PDF, stdlib for CSV, `requests` for web fetches
+- **Verification:** sandboxed subprocess recompute with timeout/resource limits (`shutdown/verification.py`)
+- **Persistence/tracing:** SQLite schema in `shutdown/db.py`; self-contained HTML trace viewer in `shutdown/trace.py`
 
 ## Setup and Installation
 
-Provide instructions on how to run your project locally:
-
 1. Clone the repository.
-2. Install dependencies: `npm install` or `pip install -r requirements.txt`
-3. Configure environment variables (provide a .env.example if necessary).
-4. Start the development server: `npm run dev` or `python main.py`
+2. `pip install -r requirements.txt`
+3. Create `.env` (gitignored) with `GEMINI_API_KEY=...` for a live LLM run — omit it to run entirely offline against `MockLLM`.
+4. `cd "code rush" && python -m shutdown.main`
+
+Output lands in `shutdown_output/` (gitignored): `research_package.zip`, a styled `trace_<run_id>.html`, and `evaluation_report.json`.
+
+## Submission docs
+
+- [`docs/architecture.md`](docs/architecture.md) — diagram + data model
+- [`docs/threat_model.md`](docs/threat_model.md) — trust boundaries, threats, mitigations
+- [`docs/evaluation_report.md`](docs/evaluation_report.md) — narrative write-up of the metrics table, regenerate with `python -m shutdown.writeup`

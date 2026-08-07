@@ -1,12 +1,18 @@
 # Core (stdlib-only fallbacks exist for all of these -- install for full functionality)
-duckduckgo-search>=6.0.0
+ddgs>=9.0.0
 requests>=2.31.0
 PyMuPDF>=1.24.0
+python-dotenv>=1.0.0
 
-# Optional real LLM backends (pick one; MockLLM is used if none are installed/keyed)
-# google-generativeai>=0.7.0
+# Real LLM backend actually used/tested (Gemini). MockLLM is used automatically
+# if no key is set, so this is only required for a live run.
+google-genai>=1.0.0
+
+# Optional alternate LLM backends (untested against this codebase, but the
+# provider-dispatch in llm.py supports them if keyed)
 # openai>=1.0.0
 # anthropic>=0.30.0
 
-# Optional browser control (heavier install, needs Playwright browsers)
+# Optional browser control (heavier install, needs Playwright browsers) --
+# not currently integrated, see HANDOFF.md "Known gaps" #1
 # browser-use>=0.1.0

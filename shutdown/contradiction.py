@@ -56,6 +56,21 @@ class FetchResult:
     injection_detail: str
 
 
+# Anti-bot / access-blocked pages that survive HTML-stripping with plenty of
+# leftover text (so the "<40 chars = empty fetch" check in main.py misses
+# them) but carry no real content to check for a contradiction against.
+_LOW_QUALITY_CONTENT_MARKERS = (
+    "enable javascript", "enable cookies", "verify you are human", "access denied",
+    "access restricted", "unusual activity", "just a moment", "checking your browser",
+    "attention required", "captcha", "temporarily unavailable",
+)
+
+
+def is_low_quality_content(content: str) -> bool:
+    lowered = content.lower()
+    return any(marker in lowered for marker in _LOW_QUALITY_CONTENT_MARKERS)
+
+
 def check_injection(content: str) -> tuple[bool, str]:
     m = _INJECTION_RE.search(content)
     if m:
