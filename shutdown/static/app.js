@@ -5,6 +5,26 @@
   const { useState, useEffect, useRef, useCallback, useMemo } = React;
   const html = htm.bind(React.createElement);
   const Icon = window.Icon;
+  let _motion = null;
+  const motion = () => (_motion ||= import("/static/motion.js"));
+
+  /* Ambient WebGL background for the composer, adapted from the
+     shader-background technique (ogl + a fragment shader driven by a few
+     uniforms) into Shutdown's own visual language -- see signalfield.js for
+     the full rationale. Mounts a canvas behind the composer and tears it
+     down on unmount; any failure (no WebGL2) degrades to a plain panel. */
+  function SignalCanvas() {
+    const ref = useRef(null);
+    useEffect(() => {
+      let handle = null, cancelled = false;
+      import("/static/signalfield.js").then(({ mountSignalField }) => {
+        if (cancelled || !ref.current) return;
+        handle = mountSignalField(ref.current, { density: 18, speed: 0.45, opacity: 0.85 });
+      }).catch(() => {});
+      return () => { cancelled = true; handle && handle.stop(); };
+    }, []);
+    return html`<canvas class="signal-canvas" ref=${ref} aria-hidden="true"></canvas>`;
+  }
 
   const STAGES = [
     { id: "framing",   label: "Framing",      icon: "branch" },
@@ -403,6 +423,16 @@
     const [strategyId, setStrategyId] = useState(null);
     const [runs, setRuns] = useState([]);
     const fileRef = useRef(null);
+    const verdictRef = useRef(null);
+
+    // fires once per verdict, not on every re-render -- otherwise the word
+    // reveal would replay on unrelated state changes elsewhere in the app
+    const revealedVerdict = useRef(null);
+    useEffect(() => {
+      if (!verdict || !verdictRef.current || revealedVerdict.current === verdict) return;
+      revealedVerdict.current = verdict;
+      requestAnimationFrame(() => motion().then((m) => m.revealVerdict(verdictRef.current)));
+    }, [verdict]);
 
     useEffect(() => { fetch("/api/health").then((r) => r.json()).then(setBackend).catch(() => {}); }, []);
     useEffect(() => {
@@ -499,6 +529,7 @@
             </div>`}
 
           <div class="composer">
+            <${SignalCanvas} />
             <textarea rows="3" value=${q} disabled=${running} placeholder="What claim should be tested? e.g. Does X hold under Y conditions..."
                       onChange=${(e) => { setQ(e.target.value); setIsDemo(false); }} />
             <div class="composer-b">
@@ -544,7 +575,7 @@
 
           ${verdict && html`
             <section class="sec">
-              <div class="verdict">
+              <div class="verdict" ref=${verdictRef}>
                 <div class="verdict-l">Verdict ${verdict.synthesized === false ? "· derived (no model synthesis)" : ""}</div>
                 <div class="verdict-a">${verdict.answer}</div>
                 <div style=${{ display: "flex", gap: 8, marginBottom: 4 }}>

@@ -124,8 +124,16 @@ a { color: var(--meta); }
 .composer {
   background: var(--s-1); border: 1px solid var(--line); border-radius: var(--r-3);
   transition: border-color .22s var(--ease), box-shadow .22s var(--ease);
+  position: relative; overflow: hidden; isolation: isolate;
 }
 .composer:focus-within { border-color: var(--line-2); box-shadow: 0 0 0 4px #e0a9420d; }
+.signal-canvas {
+  position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+.composer textarea, .composer-b {
+  position: relative; z-index: 1; /* sit above the ambient canvas */
+}
 .composer textarea {
   width: 100%; background: none; border: none; color: var(--fg); resize: none;
   padding: var(--sp-4) var(--sp-4) var(--sp-2); font: inherit; font-size: 15px; line-height: 1.5;
