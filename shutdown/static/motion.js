@@ -29,10 +29,15 @@ export function revealVerdict(container) {
   const words = text.split(" ");
   target.textContent = "";
   target.style.opacity = 1;
+  // spacing via margin, not a trailing space character inside the span --
+  // a space as the last character of an inline-block's own content collapses
+  // at the box edge (standard CSS whitespace behavior), which silently ran
+  // every word together the first time this shipped
   const spans = words.map((w) => {
     const s = document.createElement("span");
-    s.textContent = w + " ";
+    s.textContent = w;
     s.style.display = "inline-block";
+    s.style.marginRight = "0.28em";
     s.style.willChange = "transform, opacity";
     target.appendChild(s);
     return s;
