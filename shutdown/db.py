@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS sources (
     source_type TEXT,
     content_hash TEXT,
     injection_flagged INTEGER DEFAULT 0,
-    injection_detail TEXT
+    injection_detail TEXT,
+    -- did the fetch actually yield usable content? distinct from
+    -- injection_flagged, which marks a *successful* fetch we chose to refuse
+    fetch_ok INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS evidence (
@@ -108,6 +111,14 @@ CREATE TABLE IF NOT EXISTS memory (
 );
 """
 
+# Columns added after the first schema shipped. CREATE TABLE IF NOT EXISTS
+# won't add them to a database that already exists, so they're applied
+# explicitly -- a dev with an older shutdown.db shouldn't have to delete it.
+_MIGRATIONS = [
+    ("sources", "fetch_ok", "INTEGER DEFAULT 1"),
+    ("memory", "run_id", "TEXT"),
+]
+
 _write_lock = threading.Lock()
 
 
@@ -127,7 +138,14 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        for table, column, decl in _MIGRATIONS:
+            existing = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     # -- single-writer gate ------------------------------------------------
     @contextmanager

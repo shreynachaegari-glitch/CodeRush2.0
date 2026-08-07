@@ -15,9 +15,26 @@ RELATIONS = ("supports", "weakens", "refutes", "unknown")
 # evidence nudges it up; weakening evidence nudges it down softly.
 _DELTA = {"supports": +0.12, "weakens": -0.08, "refutes": -0.35, "unknown": 0.0}
 
+# Status thresholds. Defined here and imported by strategy.py rather than
+# restated there -- two copies of the same rule drift the moment one is tuned.
+ELIMINATED_AT = 0.15
+SURVIVED_AT = 0.85
+
+
+def classify(confidence: float) -> str:
+    """Confidence -> hypothesis status. Rounds first: without it, float drift
+    (0.5 - 0.35 = 0.15000000000000002) lands just past a boundary and flips
+    the classification."""
+    confidence = round(confidence, 6)
+    if confidence <= ELIMINATED_AT:
+        return "eliminated"
+    if confidence >= SURVIVED_AT:
+        return "survived"
+    return "alive"
+
 
 def add_source(store: Store, run_id: str, url_or_path: str, source_type: str, content: str,
-                injection_flagged: bool, injection_detail: str) -> str:
+                injection_flagged: bool, injection_detail: str, fetch_ok: bool = True) -> str:
     source_id = new_id()
     store.insert(
         "sources",
@@ -30,6 +47,7 @@ def add_source(store: Store, run_id: str, url_or_path: str, source_type: str, co
             "content_hash": content_hash(content),
             "injection_flagged": int(injection_flagged),
             "injection_detail": injection_detail,
+            "fetch_ok": int(fetch_ok),
         },
     )
     return source_id
@@ -62,8 +80,8 @@ def update_confidence(store: Store, hypothesis_id: str, relation: str, deltas: d
     row = store.read_one("SELECT confidence_current FROM hypotheses WHERE hypothesis_id = ?", (hypothesis_id,))
     current = row["confidence_current"] if row else 0.5
     new_conf = round(max(0.0, min(1.0, current + deltas.get(relation, 0.0))), 6)
-    status = "eliminated" if new_conf <= 0.15 else ("survived" if new_conf >= 0.85 else "alive")
-    store.update("hypotheses", "hypothesis_id", hypothesis_id, {"confidence_current": new_conf, "status": status})
+    store.update("hypotheses", "hypothesis_id", hypothesis_id,
+                 {"confidence_current": new_conf, "status": classify(new_conf)})
     return new_conf
 
 

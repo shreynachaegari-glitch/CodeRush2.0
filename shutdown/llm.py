@@ -11,6 +11,16 @@ import os
 import time
 
 
+# Safety ceiling on a single call, not a tight budget. Set generously on
+# purpose: current Gemini models spend "thinking" tokens that count against
+# this same limit, so a snug value truncates a legitimate reply mid-JSON --
+# measured, a 4-hypothesis framing costs ~1.2k tokens with thinking included.
+# A truncated framing silently degrades into the generic fallback hypothesis,
+# which is worse than an expensive call. Runaway *total* spend is bounded
+# separately by RUN_TOKEN_BUDGET in main.py, which is the real cost guard.
+MAX_OUTPUT_TOKENS = 8192
+
+
 class LLMClient:
     last_usage_tokens: int = 0
 
@@ -100,7 +110,10 @@ class _RealLLM(LLMClient):
             resp = self._client.models.generate_content(
                 model=self._model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(system_instruction=system) if system else None,
+                config=types.GenerateContentConfig(
+                    system_instruction=system or None,
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
+                ),
             )
             self.last_usage_tokens = getattr(resp.usage_metadata, "total_token_count", 0) or 0
             return resp.text
@@ -108,13 +121,14 @@ class _RealLLM(LLMClient):
             resp = self._client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                max_completion_tokens=MAX_OUTPUT_TOKENS,
             )
             self.last_usage_tokens = getattr(resp.usage, "total_tokens", 0) or 0
             return resp.choices[0].message.content
         if self._kind == "anthropic":
             resp = self._client.messages.create(
                 model="claude-3-5-haiku-latest",
-                max_tokens=1024,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
             )

@@ -42,10 +42,19 @@ _INJECTION_PATTERNS = [
 _INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
 
 # Unit normalization so "5 GHz" and "5000 MHz" don't register as a false
-# contradiction, and "23C" vs "296K" compare correctly.
+# contradiction, and "23 °C" vs "296 K" compare correctly.
+#
+# Both patterns require a word boundary *before* the number, so a version or
+# section number ("IEEE 802.11c", "section 4.3c") can't be read as a decimal
+# temperature. The Celsius form additionally requires an explicit degree sign
+# or the word "degrees" -- a bare trailing "c" is far more often a list label
+# or an identifier suffix than a unit, and silently rewriting it corrupts the
+# very text the contradiction check is about to read.
 _UNIT_PATTERNS = [
-    (re.compile(r"(\d+(?:\.\d+)?)\s*ghz", re.IGNORECASE), lambda m: f"{float(m.group(1)) * 1000} mhz"),
-    (re.compile(r"(\d+(?:\.\d+)?)\s*°?\s*c\b", re.IGNORECASE), lambda m: f"{float(m.group(1)) + 273.15} k"),
+    (re.compile(r"\b(\d+(?:\.\d+)?)\s*GHz\b", re.IGNORECASE),
+     lambda m: f"{float(m.group(1)) * 1000:g} mhz"),
+    (re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:°\s*C|℃|degrees?\s+C)\b", re.IGNORECASE),
+     lambda m: f"{float(m.group(1)) + 273.15:g} k"),
 ]
 
 

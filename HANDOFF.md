@@ -67,7 +67,7 @@ Located in `code rush/shutdown/`:
 | `demo_assets/generate_assets.py` | Generates the real demo PDF (with planted prompt-injection) and CSV dataset |
 | `evaluate.py` | Standalone held-out benchmark runner (`python -m shutdown.evaluate`) — no LLM call, no cost, reproducible |
 | `writeup.py` | Regenerates `docs/evaluation_report.md` (narrative prose) from the latest finalized run — `python -m shutdown.writeup` |
-| `tests/` | `unittest` suite covering injection detection, unit normalization, strategy scoring/policy-guard, confidence-update boundaries — `python -m unittest discover -s shutdown/tests -t .` |
+| `tests/` | 24-case `unittest` suite: injection detection, unit normalization (incl. the text-corruption regression), strategy scoring/policy-guard, confidence-update boundaries, query distillation, and the meta→control-plane seam — `python -m unittest discover -s shutdown/tests -t .` |
 
 **Confirmed working end-to-end with a real Gemini key** (`gemini-flash-latest`, via the current `google-genai` SDK — the old `google.generativeai` package and `gemini-1.5-flash` model are both dead, don't reintroduce them):
 - 3 distinct, falsifiable, domain-appropriate hypotheses generated per run
@@ -87,6 +87,63 @@ Run it: `cd "code rush" && python -m shutdown.main` (needs `.env` with `GEMINI_A
 3. `google-generativeai` deprecated, `gemini-1.5-flash` returns 404 — migrated to `google-genai` + `gemini-flash-latest` alias.
 4. `duckduckgo_search` renamed to `ddgs` — added fallback import chain.
 5. Empty/blocked fetches (403s, anti-bot pages) were silently counted as "supports" evidence — now logged as `unknown` and skipped if content is under ~40 chars, or matches an anti-bot/blocked-access marker regardless of length (see gap #2 fix below).
+
+## Second review pass (2026-08-07) — structural bugs found by reading the whole codebase
+
+These were not crashes; every one of them let the system report success while doing
+something other than what it claimed. Worth knowing about because each maps to a
+rubric item.
+
+6. **The meta plane never reached the control plane.** `main.py` called
+   `evidence.update_confidence()` without passing `deltas`, so it always used the
+   hardcoded default rule. Strategy versions were proposed, scored, promoted and
+   rolled back — and then ignored by every actual run. The central claim of the
+   project ("governed self-improvement") was cosmetic. Fixed: the active strategy is
+   now resolved and *pinned* at run start (`strategy.active_strategy()`), recorded in
+   `runs.strategy_version_id` (previously always NULL), and its deltas are threaded
+   into every confidence update. Pinning rather than re-reading mid-run keeps a run
+   reproducible — a promotion takes effect on the *next* run. Covered by
+   `tests/test_strategy_applied.py`.
+7. **Citations couldn't be traced back to a source.** `add_source()` was being passed
+   `fetch.content[:200]` as `url_or_path`, so the evidence graph stored a slice of page
+   text where the locator belonged and the real URL was discarded. Citation
+   precision/recall read 100% while no citation could actually be followed. Fixed: the
+   real URL/path is stored verbatim.
+8. **`browser_success` measured nothing.** It counted sources whose `url_or_path` was
+   non-empty — vacuously always true given #7. Fixed: added a `fetch_ok` column
+   (with a real migration, so existing DBs aren't broken) set from whether the fetch
+   actually yielded usable content. Note an injection-flagged page counts as a
+   *successful* fetch that we chose to refuse — distinct states, not conflated.
+9. **`rollback_frequency` was a lifetime total** counted across every run ever, but
+   reported inside a per-run report — it climbed 1→2→3→4→5 across consecutive demo
+   runs and read as "this run rolled back 5 times". Fixed: `memory` rows now carry a
+   `run_id` and the metric is scoped to the run.
+10. **Search queries were the entire hypothesis sentence.** ~200 characters of prose
+    pasted into a keyword search, which is why web results were weather articles and
+    RF-calculator nav bars. *This was the actual root cause of the "noisy web
+    evidence" problem* — the earlier marker-filtering work was treating the symptom.
+    Fixed: `planner.build_query()` distills the statement to its distinctive terms
+    (keeping numbers/units, dropping stopwords and hedge words) plus domain keywords.
+    Live runs now return genuinely on-topic technical sources.
+11. **Unit normalization corrupted the text it was about to analyse.** The Celsius
+    pattern `(\d+)\s*°?\s*c\b` rewrote "section 4.3c" → "section 277.45 k" and
+    "IEEE 802.11c" → "IEEE 1075.26 k", while *missing* the legitimate "23 degrees C".
+    Fixed: requires an explicit `°C`/`℃`/`degrees C` and a leading word boundary.
+12. **A too-tight token cap silently gutted the demo.** Setting
+    `max_output_tokens=1024` truncated hypothesis framing mid-JSON; parsing failed and
+    the run fell back to a *single generic* hypothesis — no competing hypotheses, so
+    nothing to falsify — while still reporting `end_to_end_success: 1.0`. Cause:
+    current Gemini models spend "thinking" tokens against the same limit (a 4-hypothesis
+    framing measures ~1.2k). Fixed: ceiling raised to 8192, and the fallback now prints
+    a loud WARNING instead of degrading quietly. **If you ever see one generic
+    hypothesis in a demo, this is why.**
+
+Also cleaned up in the same pass: duplicated confidence-classification thresholds
+(two copies of the same rule in `evidence.py` and `strategy.py`, which would have
+drifted the moment either was tuned) consolidated into `evidence.classify()`; a
+convoluted triple-nested conditional for `prompt_injection_resistance` reduced to its
+actual meaning; `DEFAULT_STRATEGY` no longer handed out by reference to callers who
+could mutate it.
 
 ## Resolved since the list below was first written (2026-08-07)
 

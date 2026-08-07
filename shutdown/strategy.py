@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 from .db import Store, dumps, new_id, now
+from .evidence import classify as _classify
 
 DISALLOWED_DIFF_FIELDS = {
     "permissions", "network_allowlist", "trusted_control", "approval_policy", "sandbox_limits",
@@ -31,21 +32,18 @@ DEFAULT_STRATEGY = {
 }
 
 
+def _deepcopy(obj: dict) -> dict:
+    """Strategies are plain JSON-shaped dicts, so a round-trip is a correct
+    (and dependency-free) deep copy."""
+    return json.loads(json.dumps(obj))
+
+
 def load_held_out_set(path: str | Path) -> list[dict]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def _apply_delta(confidence: float, relation: str, deltas: dict) -> float:
     return max(0.0, min(1.0, confidence + deltas.get(relation, 0.0)))
-
-
-def _classify(confidence: float) -> str:
-    confidence = round(confidence, 6)  # avoid float-drift landing just past a boundary
-    if confidence <= 0.15:
-        return "eliminated"
-    if confidence >= 0.85:
-        return "survived"
-    return "alive"
 
 
 def score_strategy(strategy: dict, held_out_set: list[dict]) -> dict:
@@ -159,10 +157,12 @@ def finalize_ticket(store: Store, ticket_id: str, *, approved: bool) -> None:
         store.update("strategy_versions", "version_id", ticket["proposed_version_id"], {"status": "rejected"})
 
 
-def rollback(store: Store, to_version_id: str, *, reason: str = "") -> None:
+def rollback(store: Store, to_version_id: str, *, run_id: str | None = None, reason: str = "") -> None:
     """Explicit rollback: reactivate a prior (superseded) version. Logged into
     `memory` (memory_type='rollback_event') so metrics.py can compute a
-    rollback-frequency count without a dedicated table."""
+    rollback-frequency count without a dedicated table. `run_id` attributes
+    the event to the run that triggered it -- without it the metric can only
+    report a lifetime total, which reads as "this run rolled back N times"."""
     prev_active = store.read_one("SELECT version_id FROM strategy_versions WHERE status = 'active'")
     if prev_active:
         store.update("strategy_versions", "version_id", prev_active["version_id"], {"status": "superseded"})
@@ -172,6 +172,7 @@ def rollback(store: Store, to_version_id: str, *, reason: str = "") -> None:
         {
             "memory_id": new_id(),
             "memory_type": "rollback_event",
+            "run_id": run_id,
             "content": dumps({"rolled_back_to": to_version_id, "from": prev_active["version_id"] if prev_active else None, "reason": reason}),
             "provenance": "strategy.rollback",
             "created_at": now(),
@@ -197,10 +198,17 @@ def _resolve_strategy(store: Store, version_id: str) -> dict:
         vid = row["parent_version_id"]
     chain.reverse()  # root first
 
-    strategy = json.loads(json.dumps(DEFAULT_STRATEGY))
+    strategy = _deepcopy(DEFAULT_STRATEGY)
     for row in chain:
         strategy = _merge_diff(strategy, json.loads(row["diff_json"]))
     return strategy
+
+
+def active_strategy(store: Store) -> dict:
+    """The active version id plus its fully-resolved parameters. This is how
+    the control plane gets the confidence deltas it should score evidence
+    with -- the one point where the meta plane's output actually reaches it."""
+    return _current_active_strategy(store)
 
 
 def active_version_id(store: Store) -> str:
@@ -224,12 +232,14 @@ def _current_active_strategy(store: Store) -> dict:
                 "status": "active",
             },
         )
-        return {"version_id": version_id, "strategy": DEFAULT_STRATEGY}
+        # a copy, not DEFAULT_STRATEGY itself -- callers mutating the returned
+        # dict must not be able to edit the module-level baseline
+        return {"version_id": version_id, "strategy": _deepcopy(DEFAULT_STRATEGY)}
     return {"version_id": row["version_id"], "strategy": _resolve_strategy(store, row["version_id"])}
 
 
 def _merge_diff(base: dict, diff: dict) -> dict:
-    merged = json.loads(json.dumps(base))
+    merged = _deepcopy(base)
     for k, v in diff.items():
         if isinstance(v, dict) and isinstance(merged.get(k), dict):
             merged[k].update(v)

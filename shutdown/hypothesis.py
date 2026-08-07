@@ -11,7 +11,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from .db import Store, new_id, now
+from .db import Store, new_id
 from .llm import LLMClient
 
 FRAMER_SYSTEM = (
@@ -71,6 +71,14 @@ def frame_hypotheses(store: Store, llm: LLMClient, run_id: str, question: str, p
     items = _extract_json_array(raw)
 
     if not items:
+        # Falling back to one generic hypothesis guts the whole premise -- there
+        # is nothing to compete, so nothing to falsify. Say so loudly instead of
+        # letting a truncated or malformed reply look like a normal run.
+        print(
+            "WARNING: hypothesis framing returned no parseable JSON "
+            f"({len(raw or '')} chars received); falling back to a single generic "
+            "hypothesis. Competing-hypothesis falsification is degraded for this run."
+        )
         items = [
             {
                 "statement": f"Primary claim implied by: {question}",

@@ -13,7 +13,7 @@ from . import contradiction as contradiction_mod
 from . import evidence as evidence_mod
 from . import strategy as strategy_mod
 from .approval import ApprovalGate
-from .db import Store, dumps, new_id, now
+from .db import Store, new_id, now
 from .hypothesis import frame_hypotheses
 from .llm import get_default_client
 from .metrics import render_report_table, report_for_run
@@ -40,6 +40,13 @@ THERMAL_DATASET_CSV = DEMO_ASSETS / "thermal_power_constraints.csv"
 # rather than leaving it at zero.
 _EST_USD_PER_TOKEN = 0.0000003
 
+# Hard ceiling on what one investigation may spend. The round cap in
+# planner.py bounds how many *rounds* run; this bounds total spend, which the
+# round cap can't -- one round over unusually long fetched content can be
+# arbitrarily expensive. Reaching it stops evidence collection and finalizes
+# on what's already been gathered, rather than aborting the run.
+RUN_TOKEN_BUDGET = 60_000
+
 
 def _track_cost(store: Store, run_id: str, llm) -> None:
     tokens = getattr(llm, "last_usage_tokens", 0) or 0
@@ -52,8 +59,27 @@ def _track_cost(store: Store, run_id: str, llm) -> None:
             )
 
 
+def _tokens_spent(store: Store, run_id: str) -> int:
+    row = store.read_one("SELECT total_cost_tokens FROM runs WHERE run_id = ?", (run_id,))
+    return (row["total_cost_tokens"] if row else 0) or 0
+
+
+def _over_budget(store: Store, run_id: str) -> bool:
+    return _tokens_spent(store, run_id) >= RUN_TOKEN_BUDGET
+
+
 def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
     run_id = new_id()
+
+    # Pin the strategy version for the whole run, and record which one it was.
+    # Pinning at the start (rather than re-reading after this run's own
+    # evolution ticket promotes a new version) keeps a run reproducible: the
+    # evidence in the graph was all scored under one rule, and a promoted
+    # change takes effect on the *next* run. Without this, the meta plane's
+    # output would never actually reach the control plane at all.
+    active = strategy_mod.active_strategy(store)
+    deltas = active["strategy"]["confidence_deltas"]
+
     store.insert(
         "runs",
         {
@@ -62,7 +88,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
             "started_at": now(),
             "finished_at": None,
             "status": "running",
-            "strategy_version_id": None,
+            "strategy_version_id": active["version_id"],
             "total_cost_tokens": 0,
             "total_cost_usd": 0.0,
             "human_interventions": 0,
@@ -83,31 +109,50 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
 
     round_number = 1
     contradiction_found_ever = False
+    budget_exhausted = False
 
-    while not stop_condition_met(hyps, round_number):
+    while not stop_condition_met(hyps, round_number) and not budget_exhausted:
         plan = build_plan(hyps, profile)
         round_contradiction = False
 
         for step in plan:
+            if _over_budget(store, run_id):
+                # finalize on the evidence gathered so far rather than aborting --
+                # a partial answer with an honest cost record beats no answer
+                print(f"token budget ({RUN_TOKEN_BUDGET}) reached; finalizing on evidence gathered so far")
+                budget_exhausted = True
+                break
+
             hyp = next(h for h in hyps if h.hypothesis_id == step.hypothesis_id)
 
             # -- the PDF spec sheet (with its planted instruction), fetched once, for the demo beat
             evidence_confidence = 0.6  # default for non-web legs (PDF/CSV/code -- already vetted, not search noise)
             if round_number == 1 and step is plan[0] and SPEC_SHEET_PDF.exists():
-                fetch = contradiction_mod.fetch(str(SPEC_SHEET_PDF))
+                source_ref = str(SPEC_SHEET_PDF)
+                fetch = contradiction_mod.fetch(source_ref)
             else:
                 results = hybrid_search(step.query, max_results=3)
                 top = results[0] if results else None
-                fetch = contradiction_mod.fetch(top.url if top else "https://example.invalid/none")
+                # the real locator, kept verbatim -- a citation the reader can't
+                # follow back to its origin isn't a citation
+                source_ref = top.url if top else "https://example.invalid/none"
+                fetch = contradiction_mod.fetch(source_ref)
                 if top:
                     # web search is the noisiest evidence leg (see HANDOFF known gap #2) --
                     # scale confidence by how relevant the reranked result actually was
                     # instead of trusting every hit at the same flat weight.
                     evidence_confidence = round(0.3 + 0.4 * min(1.0, max(0.0, top.score)), 3)
 
+            # an anti-bot wall or an empty body is a failed fetch even though the
+            # request completed -- recorded on the source so browser_success measures
+            # retrieval, not merely that a row was written
+            usable = (len(fetch.content.strip()) >= 40
+                      and not contradiction_mod.is_low_quality_content(fetch.content))
+
             source_id = evidence_mod.add_source(
-                store, run_id, fetch.content[:200], fetch.source_type, fetch.content,
+                store, run_id, source_ref, fetch.source_type, fetch.content,
                 fetch.injection_flagged, fetch.injection_detail,
+                fetch_ok=usable or fetch.injection_flagged,  # a flagged page did fetch fine; we refused it
             )
 
             if fetch.injection_flagged:
@@ -116,9 +161,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
                                            f"refused: injection detected ({fetch.injection_detail})")
                 continue
 
-            if len(fetch.content.strip()) < 40 or contradiction_mod.is_low_quality_content(fetch.content):
-                # empty/blocked fetch (e.g. a 403, anti-bot page, or "enable cookies" wall) has
-                # no content to actually check -- log it as unknown, don't silently count it as support
+            if not usable:
                 evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, "unknown", None, 0.0,
                                            "fetch returned no usable content")
                 continue
@@ -127,12 +170,14 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
             _track_cost(store, run_id, llm)
             relation = "refutes" if contradicts else "supports"
             evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, relation, cls, evidence_confidence, reason or "search result")
-            new_conf = evidence_mod.update_confidence(store, hyp.hypothesis_id, relation)
+            new_conf = evidence_mod.update_confidence(store, hyp.hypothesis_id, relation, deltas=deltas)
             hyp.confidence_current = new_conf
             if contradicts:
                 round_contradiction = True
                 contradiction_found_ever = True
 
+        if budget_exhausted:
+            break
         if should_replan(round_contradiction, round_number):
             round_number += 1
             continue
@@ -186,7 +231,8 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
     )
     bad_eval = strategy_mod.evaluate_ticket(store, bad_ticket_id, held_out)
     strategy_mod.finalize_ticket(store, bad_ticket_id, approved=True)  # simulate: promoted before regression caught
-    strategy_mod.rollback(store, pre_rollback_active)
+    strategy_mod.rollback(store, pre_rollback_active, run_id=run_id,
+                          reason="held-out accuracy regressed after promotion")
     rollback_demo = {
         "bad_version_accuracy": bad_eval["after"]["accuracy"],
         "restored_version_accuracy": bad_eval["before"]["accuracy"],

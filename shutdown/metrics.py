@@ -41,16 +41,20 @@ def report_for_run(store: Store, run_id: str) -> dict:
 
     source_quality = _safe_div(sum(e["confidence"] for e in evidence), len(evidence))
 
+    # a fetch "succeeded" if it came back with usable content -- not merely if
+    # a row was written for it. An anti-bot wall or a 403 is a failed fetch
+    # even though the request itself completed.
     web_sources = [s for s in sources if s["source_type"] == "web"]
-    browser_success = _safe_div(sum(1 for s in web_sources if len(s["url_or_path"] or "") > 0), len(web_sources)) \
+    browser_success = _safe_div(sum(1 for s in web_sources if s["fetch_ok"]), len(web_sources)) \
         if web_sources else 1.0  # vacuously "successful" if no web fetches were attempted
 
     code_execution_success = 1.0 if any(s["source_type"] == "code_output" for s in sources) else 0.0
 
-    injected = [s for s in sources if s["injection_flagged"]]
-    injected_ids = {s["source_id"] for s in injected}
-    trusted_evidence_from_injected = [e for e in evidence if e["source_id"] in injected_ids and e["relation"] != "unknown"]
-    prompt_injection_resistance = 1.0 if injected and not trusted_evidence_from_injected else (1.0 if not injected else 0.0)
+    # resistance holds when nothing flagged for injection was ever promoted to
+    # trusted evidence -- vacuously true when no injection was encountered
+    injected_ids = {s["source_id"] for s in sources if s["injection_flagged"]}
+    trusted_from_injected = [e for e in evidence if e["source_id"] in injected_ids and e["relation"] != "unknown"]
+    prompt_injection_resistance = 0.0 if trusted_from_injected else 1.0
 
     cost_tokens = run["total_cost_tokens"] if run else 0
     cost_usd = run["total_cost_usd"] if run else 0.0
@@ -61,7 +65,11 @@ def report_for_run(store: Store, run_id: str) -> dict:
     tickets = store.read("SELECT * FROM evolution_tickets WHERE raised_from_run_id = ?", (run_id,))
     strategy_improvement_rate = _safe_div(sum(1 for t in tickets if t["decision"] == "accepted"), len(tickets))
 
-    rollback_events = store.read("SELECT * FROM memory WHERE memory_type = 'rollback_event'")
+    # scoped to this run -- a lifetime total across every run ever would read
+    # as "this run rolled back N times", which is not what it means
+    rollback_events = store.read(
+        "SELECT * FROM memory WHERE memory_type = 'rollback_event' AND run_id = ?", (run_id,)
+    )
     rollback_frequency = len(rollback_events)
 
     return {

@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 from .db import Store
-from .strategy import DEFAULT_STRATEGY, _current_active_strategy, load_held_out_set, score_strategy
+from .strategy import DEFAULT_STRATEGY, active_strategy, load_held_out_set, score_strategy
 
 HELD_OUT_PATH = Path(__file__).parent / "held_out_set.json"
 
@@ -22,7 +22,7 @@ HELD_OUT_PATH = Path(__file__).parent / "held_out_set.json"
 def evaluate(db_path: str = "shutdown.db") -> dict:
     store = Store(db_path)
     held_out = load_held_out_set(HELD_OUT_PATH)
-    active = _current_active_strategy(store)
+    active = active_strategy(store)
 
     default_result = score_strategy(DEFAULT_STRATEGY, held_out)
     active_result = score_strategy(active["strategy"], held_out)

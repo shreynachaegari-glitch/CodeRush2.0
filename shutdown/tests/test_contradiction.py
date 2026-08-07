@@ -16,10 +16,20 @@ class TestInjectionDetection(unittest.TestCase):
 
 class TestUnitNormalization(unittest.TestCase):
     def test_ghz_to_mhz(self):
-        self.assertIn("5000.0 mhz", normalize_units("operating at 5 GHz").lower())
+        self.assertIn("5000 mhz", normalize_units("operating at 5 GHz").lower())
 
-    def test_celsius_to_kelvin(self):
-        self.assertIn("296.15 k", normalize_units("ambient temperature 23C").lower())
+    def test_celsius_to_kelvin_with_degree_sign(self):
+        self.assertIn("296.15 k", normalize_units("ambient temperature 23 °C").lower())
+
+    def test_celsius_to_kelvin_spelled_out(self):
+        self.assertIn("296.15 k", normalize_units("ambient temperature 23 degrees C").lower())
+
+    def test_does_not_mangle_section_or_version_numbers(self):
+        # regression: a bare trailing "c" used to be read as Celsius, rewriting
+        # "section 4.3c" into a temperature and corrupting the text the
+        # contradiction check was about to read
+        for text in ("see section 4.3c for details", "IEEE 802.11c standard"):
+            self.assertEqual(normalize_units(text), text)
 
 
 if __name__ == "__main__":
