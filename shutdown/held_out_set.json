@@ -1,0 +1,122 @@
+[
+  {
+    "id": "ho-01",
+    "source": "self-authored",
+    "statement": "Three independent papers confirm the same RIS gain under matching channel assumptions.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["supports", "supports", "supports"],
+    "expected_status": "survived"
+  },
+  {
+    "id": "ho-02",
+    "source": "self-authored",
+    "statement": "A code-verified recompute directly refutes the claimed BER figure.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["refutes"],
+    "expected_status": "eliminated"
+  },
+  {
+    "id": "ho-03",
+    "source": "self-authored",
+    "statement": "Two sources report a smaller effect size than the original claim, but don't outright contradict it.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["weakens", "weakens"],
+    "expected_status": "alive"
+  },
+  {
+    "id": "ho-04",
+    "source": "self-authored",
+    "statement": "A weak prior claim accumulates four supporting sources.",
+    "start_confidence": 0.3,
+    "evidence_sequence": ["supports", "supports", "supports", "supports"],
+    "expected_status": "alive"
+  },
+  {
+    "id": "ho-05",
+    "source": "self-authored",
+    "statement": "A moderately confident claim takes one refutation.",
+    "start_confidence": 0.6,
+    "evidence_sequence": ["refutes"],
+    "expected_status": "alive"
+  },
+  {
+    "id": "ho-06",
+    "source": "self-authored",
+    "statement": "Mixed evidence: one supporting source followed by a refuting recompute.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["supports", "refutes"],
+    "expected_status": "alive"
+  },
+  {
+    "id": "ho-07",
+    "source": "self-authored",
+    "statement": "A well-supported claim gets two more confirmations.",
+    "start_confidence": 0.7,
+    "evidence_sequence": ["supports", "supports"],
+    "expected_status": "survived"
+  },
+  {
+    "id": "ho-08",
+    "source": "self-authored",
+    "statement": "A claim is weakened then refuted in sequence.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["weakens", "refutes"],
+    "expected_status": "eliminated"
+  },
+  {
+    "id": "ho-09",
+    "source": "adapted",
+    "statement": "Adapted from a published deep-research-benchmark task description: a low-confidence claim about modulation robustness accumulates repeated independent confirmation.",
+    "start_confidence": 0.4,
+    "evidence_sequence": ["supports", "supports", "supports", "supports"],
+    "expected_status": "survived"
+  },
+  {
+    "id": "ho-10",
+    "source": "adapted",
+    "statement": "Adapted: an initial refutation is followed by a single counter-supporting source.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["refutes", "supports"],
+    "expected_status": "alive"
+  },
+  {
+    "id": "ho-11",
+    "source": "adapted",
+    "statement": "Adapted: a fringe claim with low prior confidence is directly refuted.",
+    "start_confidence": 0.2,
+    "evidence_sequence": ["refutes"],
+    "expected_status": "eliminated"
+  },
+  {
+    "id": "ho-12",
+    "source": "adapted",
+    "statement": "Adapted: a near-certain claim takes one minor weakening source.",
+    "start_confidence": 0.9,
+    "evidence_sequence": ["weakens"],
+    "expected_status": "alive"
+  },
+  {
+    "id": "ho-13",
+    "source": "adapted",
+    "statement": "Adapted: a moderate claim receives an unusually large run of supporting sources.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["supports", "supports", "supports", "supports", "supports"],
+    "expected_status": "survived"
+  },
+  {
+    "id": "ho-14",
+    "source": "adapted",
+    "statement": "Adapted: a claim with no evidence gathered yet (planner stopped early).",
+    "start_confidence": 0.5,
+    "evidence_sequence": [],
+    "expected_status": "alive"
+  },
+  {
+    "id": "ho-15",
+    "source": "adapted",
+    "statement": "Adapted: a claim accumulates a long run of weakening (but never outright refuting) evidence.",
+    "start_confidence": 0.5,
+    "evidence_sequence": ["weakens", "weakens", "weakens", "weakens", "weakens"],
+    "expected_status": "eliminated"
+  }
+]

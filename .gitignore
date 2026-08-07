@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+shutdown.db
+shutdown.db-wal
+shutdown.db-shm
+shutdown_output/
+.env

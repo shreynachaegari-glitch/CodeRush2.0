@@ -1,0 +1,5 @@
+{
+  "name": "communications",
+  "description": "Satellite / RF communications research profile. Loaded directly -- no multi-profile auto-routing, since the demo is scoped to this single domain.",
+  "search_keywords": ["satellite", "link budget", "RF", "arbitration", "3GPP", "IEEE"]
+}

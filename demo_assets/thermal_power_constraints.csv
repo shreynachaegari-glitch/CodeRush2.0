@@ -1,0 +1,5 @@
+component,peak_power_w,thermal_budget_w,duty_cycle_pct
+master_node_soc,3.2,4.0,65
+slave_node_soc,2.1,4.0,40
+rf_power_amplifier,8.5,10.0,25
+downlink_modem,1.4,2.0,55
