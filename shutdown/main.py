@@ -77,10 +77,19 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
                       emit=_noop_emit,
                       spec_pdf: Path | None = None,
                       dataset_csv: Path | None = None) -> str:
-    """`spec_pdf`/`dataset_csv` override the bundled demo assets, so an
-    uploaded document can be investigated instead of the built-in one."""
+    """`spec_pdf` is the primary document under investigation.
+
+    Passing one marks this as a *user-document* run, which changes two things:
+    the bundled demo CSV is not attached (someone investigating their own
+    report does not want a satellite thermal table cited as evidence for it),
+    and the document is read against **every** hypothesis rather than only the
+    first — if you upload a document, you want it examined against all of the
+    competing claims, not one of them.
+    """
+    user_document = spec_pdf is not None
     spec_pdf = SPEC_SHEET_PDF if spec_pdf is None else spec_pdf
-    dataset_csv = THERMAL_DATASET_CSV if dataset_csv is None else dataset_csv
+    if dataset_csv is None and not user_document:
+        dataset_csv = THERMAL_DATASET_CSV
     run_id = new_id()
 
     # Pin the strategy version for the whole run, and record which one it was.
@@ -108,7 +117,9 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
     )
 
     emit("run_started", {"run_id": run_id, "question": question,
-                         "strategy_version_id": active["version_id"], "deltas": deltas})
+                         "strategy_version_id": active["version_id"], "deltas": deltas,
+                         "document": spec_pdf.name if spec_pdf.exists() else None,
+                         "user_document": user_document})
 
     emit("stage", {"stage": "framing", "status": "active"})
     hyps = frame_hypotheses(store, llm, run_id, question, profile)
@@ -122,7 +133,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
 
     # -- structured dataset leg (CSV), logged once against the first hypothesis
     # up front, independent of the search loop below
-    if dataset_csv.exists() and hyps:
+    if dataset_csv is not None and dataset_csv.exists() and hyps:
         ds_fetch = contradiction_mod.fetch(str(dataset_csv))
         ds_source_id = evidence_mod.add_source(store, run_id, str(dataset_csv), ds_fetch.source_type,
                                                 ds_fetch.content, ds_fetch.injection_flagged, ds_fetch.injection_detail)
@@ -158,9 +169,13 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
 
             hyp = next(h for h in hyps if h.hypothesis_id == step.hypothesis_id)
 
-            # -- the PDF spec sheet (with its planted instruction), fetched once, for the demo beat
+            # The primary document. For an uploaded document that's every
+            # hypothesis in round 1 -- the user wants their file examined
+            # against all the competing claims. For the bundled demo asset it's
+            # just the first, so the rest of the run exercises live search.
             evidence_confidence = 0.6  # default for non-web legs (PDF/CSV/code -- already vetted, not search noise)
-            if round_number == 1 and step is plan[0] and spec_pdf.exists():
+            read_document = round_number == 1 and (user_document or step is plan[0])
+            if read_document and spec_pdf.exists():
                 source_ref = str(spec_pdf)
                 emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": source_ref, "kind": "document"})
                 fetch = contradiction_mod.fetch(source_ref)

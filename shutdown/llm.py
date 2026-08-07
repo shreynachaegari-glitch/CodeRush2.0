@@ -69,7 +69,14 @@ _KEY_ENV_VARS = ("GEMINI_API_KEY", "NVIDIA_API_KEY", "OPENAI_API_KEY", "ANTHROPI
 
 
 def get_default_client() -> LLMClient:
-    """Return a real client if a key is configured, else fall back to the mock."""
+    """Return a real client if a key is configured, else fall back to the mock.
+
+    `SHUTDOWN_OFFLINE=1` forces the mock even when a key is present -- the
+    escape hatch for a rate-limited or dead API mid-demo, and for screenshots
+    and CI runs that shouldn't spend quota.
+    """
+    if os.environ.get("SHUTDOWN_OFFLINE") == "1":
+        return MockLLM()
     if any(os.environ.get(k) for k in _KEY_ENV_VARS):
         try:
             return _RealLLM()
