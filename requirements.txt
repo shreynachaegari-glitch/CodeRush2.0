@@ -13,6 +13,6 @@ google-genai>=1.0.0
 # openai>=1.0.0
 # anthropic>=0.30.0
 
-# Optional browser control (heavier install, needs Playwright browsers) --
-# not currently integrated, see HANDOFF.md "Known gaps" #1
-# browser-use>=0.1.0
+# Browser control -- real headless-browser fetch for JS-rendered pages
+# (falls back to plain requests.get() automatically if not installed)
+browser-use>=0.13.0

@@ -2,9 +2,10 @@
 for injected instructions before it ever reaches the planning context, and
 classifies genuine contradictions instead of just flagging "disagreement".
 
-Browser fetches go through `browser-use` if it's installed; otherwise a
-plain `requests` GET is used as a fallback so the pipeline still runs
-end-to-end without a Playwright install.
+Browser fetches go through `browser-use` (real headless Chromium via CDP,
+handles JS-rendered pages) if the package is installed; otherwise a plain
+`requests` GET is used as a fallback so the pipeline still runs end-to-end
+without that dependency.
 """
 
 from __future__ import annotations
@@ -119,14 +120,52 @@ def _strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_BROWSER_FETCH_TIMEOUT_S = 25
+
+
 def _fetch_web(url: str) -> tuple[str, str]:
+    content = _fetch_via_browser_use(url)
+    if content is not None:
+        return content, "web"
+    return _fetch_via_requests(url), "web"
+
+
+def _fetch_via_browser_use(url: str) -> str | None:
+    """Real headless-browser fetch, so JS-rendered pages are handled instead
+    of just static HTML -- returns None (never raises) if browser-use isn't
+    installed or the browser fails/times out, so the caller can fall back to
+    the plain requests leg without its own try/except."""
+    try:
+        from browser_use import Browser
+    except ImportError:
+        return None
+
+    import asyncio
+
+    async def _run() -> str:
+        browser = Browser(headless=True)
+        await browser.start()
+        try:
+            await browser.navigate_to(url)
+            state = await browser.get_browser_state_summary(include_screenshot=False)
+            return state.dom_state.llm_representation()[:40000]
+        finally:
+            await browser.stop()
+
+    try:
+        return asyncio.run(asyncio.wait_for(_run(), timeout=_BROWSER_FETCH_TIMEOUT_S))
+    except Exception:
+        return None
+
+
+def _fetch_via_requests(url: str) -> str:
     try:
         import requests
 
         resp = requests.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0"})
-        return _strip_html(resp.text[:40000]), "web"
+        return _strip_html(resp.text[:40000])
     except Exception:
-        return f"[offline-mock] could not fetch {url}", "web"
+        return f"[offline-mock] could not fetch {url}"
 
 
 def _fetch_pdf(path: str) -> tuple[str, str]:

@@ -36,7 +36,7 @@ Technical depth 25% · Verified usefulness 20% · Reliability/evaluation 20% · 
 ## What NOT to build (deliberate, already argued through — don't re-litigate)
 
 - No Neo4j, Docker, ChromaDB, e2b, Langfuse, GAIA (gated dataset), or a real vector DB.
-- No forking `open_deep_research`, `open-coscientist-agents`, `Open-Prompt-Injection`, or `reflexion` wholesale — read them for pattern ideas only, write the logic ourselves. `browser-use` was the one sanctioned exception (see Known Gaps — never actually integrated).
+- No forking `open_deep_research`, `open-coscientist-agents`, `Open-Prompt-Injection`, or `reflexion` wholesale — read them for pattern ideas only, write the logic ourselves. `browser-use` was the one sanctioned exception and is now integrated (see below).
 - No model fine-tuning / RL self-improvement — self-evolution is scoped to prompts/policies/retrieval-weights only, never model weights or the trusted control layer.
 - No multi-domain "research profile" auto-routing — demo is locked to one domain (communications/satellite), loaded directly.
 - No hierarchical/multi-timescale evolution, no tournament/ELO strategy promotion, no skill-library subsystem, no novelty-search bonus, no confidence-tiered evolution ladder — all considered and cut for hackathon scope; full reasoning in the plan file section "What's explicitly NOT in the architecture."
@@ -96,10 +96,11 @@ Run it: `cd "code rush" && python -m shutdown.main` (needs `.env` with `GEMINI_A
 - **#8 (no LLM retry handling)** — `llm.py:_with_retry()` wraps every real-provider call with exponential backoff on transient errors (429/5xx/timeout/connection); non-transient errors still raise immediately.
 - **#9 (stale requirements.txt)** — cleaned up to `ddgs`, `python-dotenv`, `google-genai` as real (not commented-out) deps.
 - **#5 (partial)** — `docs/architecture.md` (mermaid diagram + data model), `docs/threat_model.md` (trust boundaries / threats / mitigations table), and `docs/evaluation_report.md` (narrative writeup, regenerate via `python -m shutdown.writeup`) added. Demo recording itself is still outstanding.
+- **#1 (browser-use)** — installed (`browser-use` 0.13.x; note this package uses `browser-harness`/CDP against a real/managed Chromium under the hood, not Playwright directly, so no separate `playwright install` step was needed) and wired into `contradiction.py:_fetch_via_browser_use()`. Real headless-browser fetch (handles JS-rendered pages via `dom_state.llm_representation()`), 25s timeout, falls back to `requests.get()` automatically if the package is missing or the browser fails. Confirmed working end-to-end in a full pipeline run.
 
 ## Known gaps — real next steps, ranked
 
-1. **`browser-use` was never actually integrated.** The plan named it as the one sanctioned external library for browser control; the current implementation uses a plain `requests.get()` fallback instead. If the demo needs live interactive-page browsing (not just static PDF/CSV/search-result fetches), this needs to be wired in. Deliberately not done yet — heavier install (Playwright browsers), weigh against remaining hackathon time before starting.
+1. ~~`browser-use` never integrated~~ — resolved, see above.
 2. ~~Web-search evidence is noisy~~ — resolved, see above. Residual: no hard ceiling on total token/cost spend per run independent of the round cap (see `docs/threat_model.md` T6).
 3. **Rotate the Gemini API keys.** Two keys were pasted directly into an earlier chat (both now in that transcript) — go to `aistudio.google.com/apikey` and regenerate/delete once done testing. `.env` locally is fine and gitignored; chat history is not a safe place for a live key. **Still outstanding — this requires the user, not code.**
 4. **No dry-run/rehearsal of the actual 7-8 minute demo script yet** — approval-gate click timing, narration, the "unscripted second hypothesis" beat from the plan's demo script are not yet tested as a live presentation.
