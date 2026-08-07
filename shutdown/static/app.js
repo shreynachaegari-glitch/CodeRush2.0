@@ -33,6 +33,13 @@
     { id: "evolving",  label: "Evolution",    icon: "dna" },
     { id: "verdict",   label: "Verdict",      icon: "seal" },
   ];
+  const AGENTS = [
+    { id: "framing",   name: "Hypothesis Framer",   role: "Generates competing falsifiable claims",       icon: "branch" },
+    { id: "hunting",    name: "Contradiction Hunter", role: "Hunts for evidence that would kill each claim", icon: "hunt" },
+    { id: "verifying", name: "Verification Agent",  role: "Recomputes a claim in a sandbox",               icon: "beaker" },
+    { id: "evolving",  name: "Strategy Evaluator",  role: "Diagnoses this run, proposes a governed fix",   icon: "dna" },
+    { id: "verdict",   name: "Verdict Synthesizer", role: "States the answer, rules each claim",           icon: "seal" },
+  ];
   const NAV = [
     { id: "workspace",  label: "Research",        icon: "hunt" },
     { id: "runs",       label: "Runs",            icon: "runs" },
@@ -43,7 +50,7 @@
     { id: "reports",    label: "Reports",         icon: "reports" },
   ];
   const SRC_ICON = { pdf: "doc", paper: "paper", dataset: "database", web: "globe", code_output: "terminal", inline: "doc" };
-  const OK = "#6fae6f", WARN = "#c98a3f", BAD = "#b0402f", META = "#4a8a82", KILL = "#b0402f";
+  const OK = "#1f8a55", WARN = "#b3790f", BAD = "#c23b2e", META = "#7c5cbf", KILL = "#c23b2e", CONTROL = "#3454d1";
 
   const hue = (s) => (s === "survived" || s === "supported" ? OK
                     : s === "eliminated" || s === "falsified" ? BAD : WARN);
@@ -87,7 +94,7 @@
     return html`
       <div class="ring" style=${{ width: size, height: size }}>
         <svg width=${size} height=${size}>
-          <circle cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke="#212a24" stroke-width="3" />
+          <circle cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke="#e6e8eb" stroke-width="3" />
           <circle cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke=${col} stroke-width="3"
                   stroke-linecap="round" stroke-dasharray=${C} stroke-dashoffset=${C * (1 - v)} />
         </svg>
@@ -95,7 +102,8 @@
       </div>`;
   }
 
-  /* ── pipeline ─────────────────────────────────────────── */
+  /* ── pipeline: thin connector row, kept above the agent cards so the
+     flow between agents is still visible at a glance ────────────────── */
   const Pipeline = ({ stages }) => html`
     <div class="pipe">
       ${STAGES.map((s, i) => {
@@ -105,6 +113,31 @@
           <div class="pstage ${st} ${flowed ? "flowed" : ""}" key=${s.id}>
             <div class="porb"><${Icon} name=${st === "done" ? "check" : s.icon} size=15 /></div>
             <div class="pl">${s.label}</div>
+          </div>`;
+      })}
+    </div>`;
+
+  /* ── agents: each pipeline stage as its own card with live status text
+     pulled from the event stream, not a generic spinner ─────────────── */
+  const AgentCards = ({ stages, activity }) => html`
+    <div class="agents">
+      ${AGENTS.map((a) => {
+        const st = stages[a.id] || "idle";
+        return html`
+          <div class="agent ${st}" key=${a.id}>
+            <div class="agent-hd">
+              <div class="agent-ic"><${Icon} name=${st === "done" ? "check" : a.icon} size=15 /></div>
+              <div>
+                <div class="agent-n">${a.name}</div>
+                <div class="agent-r">${a.role}</div>
+              </div>
+              <div class="agent-status"><${Tag} k=${st === "done" ? "supports" : st === "active" ? "alive" : "unknown"}>${st}<//></div>
+            </div>
+            <div class="agent-live">
+              ${st === "active"
+                ? html`<span class="dots">${activity[a.id] || "working"}</span>`
+                : st === "done" ? (activity[a.id] || "complete") : "waiting"}
+            </div>
           </div>`;
       })}
     </div>`;
@@ -279,8 +312,8 @@
             ${rollback && html`
               <div>
                 <div class="sp-t">Rollback history</div>
-                <div class="commit-c" style=${{ borderLeft: `2px solid ${"#8c7aa8"}` }}>
-                  <div class="commit-h"><${Icon} name="rewind" size=14 style=${{ color: "#8c7aa8" }} /> Regression caught after promotion</div>
+                <div class="commit-c" style=${{ borderLeft: `2px solid ${"#7c5cbf"}` }}>
+                  <div class="commit-h"><${Icon} name="rewind" size=14 style=${{ color: "#7c5cbf" }} /> Regression caught after promotion</div>
                   <div class="bench">
                     <span class="to dn">${rollback.bad_version_accuracy.toFixed(3)}</span>
                     <span class="from">→</span>
@@ -408,6 +441,7 @@
     const [metaOpen, setMetaOpen] = useState(false);
 
     const [stages, setStages] = useState({});
+    const [activity, setActivity] = useState({});
     const [round, setRound] = useState(1);
     const [hyps, setHyps] = useState([]);
     const [ev, setEv] = useState({});
@@ -448,7 +482,7 @@
       setFeed((F) => [...F.slice(-80), { t: new Date().toLocaleTimeString([], { hour12: false }), m, hi }]), []);
 
     async function launch() {
-      setStages({}); setRound(1); setHyps([]); setEv({}); setPapers([]); setBreaches([]);
+      setStages({}); setActivity({}); setRound(1); setHyps([]); setEv({}); setPapers([]); setBreaches([]);
       setTickets([]); setTeacher(null); setRollback(null); setVerdict(null); setSynthesis(null);
       setReport(null); setFeed([]); setErr(null); setOpenIds({}); setDocName(null);
       setStoreRunId(null); setRunning(true); setView("workspace");
@@ -480,27 +514,31 @@
         if (d.document) log(`${d.user_document ? "your document" : "bundled demo doc"}: ${d.document}`, !!d.user_document);
       });
       on("stage", (d) => setStages((s) => ({ ...s, [d.stage]: d.status })));
+      const setAct = (stage, text) => setActivity((A) => ({ ...A, [stage]: text }));
       on("hypotheses", (d) => {
         setHyps(d.hypotheses);
         setOpenIds(Object.fromEntries(d.hypotheses.map((h) => [h.id, true])));
+        setAct("framing", `${d.hypotheses.length} competing hypotheses framed`);
         log(`framed ${d.hypotheses.length} competing hypotheses`, true);
       });
-      on("round", (d) => { setRound(d.round); log(`round ${d.round} · ${d.steps.length} step(s)`); });
-      on("fetching", (d) => log(`${d.kind} · ${String(d.source).slice(0, 56)}`));
-      on("papers", (d) => { setPapers((P) => [...P, ...d.papers]); log(`${d.papers.length} papers retrieved`, true); });
+      on("round", (d) => { setRound(d.round); setAct("hunting", `round ${d.round} · ${d.steps.length} step(s)`); log(`round ${d.round} · ${d.steps.length} step(s)`); });
+      on("fetching", (d) => { setAct("hunting", `${d.kind} · ${shortSrc(d.source)}`); log(`${d.kind} · ${String(d.source).slice(0, 56)}`); });
+      on("papers", (d) => { setPapers((P) => [...P, ...d.papers]); setAct("hunting", `${d.papers.length} papers retrieved`); log(`${d.papers.length} papers retrieved`, true); });
       on("evidence", (d) => {
         setEv((E) => ({ ...E, [d.hypothesis_id]: [...(E[d.hypothesis_id] || []), d] }));
         if (d.new_confidence != null)
           setHyps((H) => H.map((h) => h.id === d.hypothesis_id ? { ...h, confidence: d.new_confidence, status: d.status } : h));
+        setAct("hunting", `${d.relation} · ${shortSrc(d.source)}`);
         log(`${d.relation} · ${shortSrc(d.source)}`, d.relation === "refutes");
       });
-      on("injection_refused", (d) => { setBreaches((B) => [...B, d]); log(`INJECTION REFUSED · ${d.locator}`, true); });
-      on("replan", (d) => { setRound(d.to_round); log(`replanning → round ${d.to_round}`, true); });
-      on("verification", (d) => log(`sandbox ${d.ok ? "ok" : "failed"} · ${String(d.stdout).replace(/\n/g, " · ")}`));
-      on("teacher", (d) => { setTeacher(d); log(`teacher: ${d.authored_by === "teacher" ? "model-authored" : "derived"} critique`, true); });
+      on("injection_refused", (d) => { setBreaches((B) => [...B, d]); setAct("hunting", `injection refused · ${d.locator}`); log(`INJECTION REFUSED · ${d.locator}`, true); });
+      on("replan", (d) => { setRound(d.to_round); setAct("hunting", `replanning → round ${d.to_round}`); log(`replanning → round ${d.to_round}`, true); });
+      on("verification", (d) => { setAct("verifying", `sandbox ${d.ok ? "ok" : "failed"} · ${String(d.stdout).replace(/\n/g, " · ").slice(0, 60)}`); log(`sandbox ${d.ok ? "ok" : "failed"} · ${String(d.stdout).replace(/\n/g, " · ")}`); });
+      on("teacher", (d) => { setTeacher(d); setAct("evolving", d.failure_description?.slice(0, 70) || "critique complete"); log(`teacher: ${d.authored_by === "teacher" ? "model-authored" : "derived"} critique`, true); });
       on("ticket", (d) => setTickets((T) => [...T, d]));
-      on("rollback", (d) => { setRollback(d); log(`rolled back to ${String(d.rolled_back_to).slice(0, 7)}`, true); });
+      on("rollback", (d) => { setRollback(d); setAct("evolving", `rolled back to ${String(d.rolled_back_to).slice(0, 7)}`); log(`rolled back to ${String(d.rolled_back_to).slice(0, 7)}`, true); });
       on("verdict", (d) => {
+        setAct("verdict", d.answer ? d.answer.slice(0, 80) : "verdict synthesized");
         setVerdict(d);
         // merge, don't replace -- the verdict payload carries the ruling but
         // not kills_it (the falsification target from framing); replacing
@@ -518,6 +556,12 @@
 
     const ranked = useMemo(() => [...hyps].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)), [hyps]);
     const evCount = Object.values(ev).reduce((n, a) => n + a.length, 0);
+    // prefer a verdict-supported claim over raw confidence -- confidence alone
+    // isn't "best" until the verdict has actually ruled on it
+    const bestHyp = useMemo(() => {
+      if (ranked.length === 0 || evCount === 0) return null;
+      return ranked.find((h) => h.ruling === "supported") || (ranked[0].status !== "eliminated" ? ranked[0] : null);
+    }, [ranked, evCount]);
     const quota = err && /429|RESOURCE_EXHAUSTED|quota/i.test(err);
     const started = running || hyps.length > 0;
 
@@ -581,7 +625,11 @@
               </div>
             </div>`}
 
-          ${started && html`<div style=${{ marginTop: 28 }}><${Pipeline} stages=${stages} /></div>`}
+          ${started && html`
+            <div style=${{ marginTop: 28 }}>
+              <${Pipeline} stages=${stages} />
+              <${AgentCards} stages=${stages} activity=${activity} />
+            </div>`}
           ${breaches.map((b, i) => html`<${Breach} a=${b} key=${i} />`)}
 
           ${verdict && html`
@@ -610,7 +658,7 @@
 
           ${synthesis && html`
             <section class="sec">
-              <div class="sec-hd"><${Icon} name="idea" size=15 style=${{ color: "#8c7aa8" }} />
+              <div class="sec-hd"><${Icon} name="idea" size=15 style=${{ color: "#7c5cbf" }} />
                 <h2>Original proposals</h2><span class="n">evidence-constrained</span></div>
               ${synthesis.proposals?.length
                 ? synthesis.proposals.map((p, i) => html`
@@ -629,6 +677,11 @@
             <section class="sec">
               <div class="sec-hd"><${Icon} name="branch" size=15 style=${{ color: WARN }} />
                 <h2>Hypotheses</h2><span class="n">${hyps.length} claims · ${evCount} evidence</span></div>
+              ${bestHyp && html`
+                <div class="best">
+                  <${Icon} name="check" size=15 style=${{ color: OK }} />
+                  <span><b>Best result</b> — ${Math.round((bestHyp.confidence ?? 0) * 100)}% confidence${bestHyp.ruling ? `, ruled ${bestHyp.ruling}` : ""}: ${bestHyp.statement}</span>
+                </div>`}
               ${hyps.length === 0
                 ? html`<div class="empty"><div class="et"><span class="dots">Framing competing hypotheses</span></div>
                         <div class="ed">Each claim must state what would disprove it.</div>
@@ -696,9 +749,40 @@
                 </button>`)}
         <//>`,
 
-      reports: () => html`
+      reports: () => {
+        const CONF_RANK = { high: 3, moderate: 2, low: 1 };
+        const withVerdict = runs.filter((r) => r.verdict);
+        const bestRunId = withVerdict.length
+          ? withVerdict.reduce((best, r) =>
+              (CONF_RANK[r.verdict.confidence] || 0) > (CONF_RANK[best.verdict.confidence] || 0) ? r : best
+            ).run_id
+          : null;
+        return html`
         <${React.Fragment}>
-          <div class="work-hd"><h1>Reports</h1><span class="sub">evaluation packages</span></div>
+          <div class="work-hd"><h1>Reports</h1><span class="sub">evaluation packages · compared across cases</span></div>
+
+          ${withVerdict.length > 1 && html`
+            <section class="sec">
+              <div class="sec-hd"><${Icon} name="reports" size=15 style=${{ color: CONTROL }} />
+                <h2>Comparison across cases</h2><span class="n">${withVerdict.length} runs with a verdict</span></div>
+              <div style=${{ border: "1px solid var(--line)", borderRadius: 12, overflowX: "auto", background: "var(--s-0)" }}>
+                <table class="cmp">
+                  <thead><tr><th>Case</th><th>Verdict</th><th>Confidence</th><th>Claims</th><th style=${{ textAlign: "right" }}>Tokens</th></tr></thead>
+                  <tbody>
+                    ${withVerdict.map((r) => html`
+                      <tr class=${r.run_id === bestRunId ? "best-row" : ""} key=${r.run_id}>
+                        <td class="q">${r.question}</td>
+                        <td class="q">${r.verdict.answer}</td>
+                        <td><${Tag} k=${r.verdict.confidence === "high" ? "supports" : r.verdict.confidence === "low" ? "refutes" : "weakens"}>
+                          ${r.verdict.confidence}${r.run_id === bestRunId ? " · best" : ""}<//></td>
+                        <td class="num">${r.hypotheses}</td>
+                        <td class="num">${(r.tokens || 0).toLocaleString()}</td>
+                      </tr>`)}
+                  </tbody>
+                </table>
+              </div>
+            </section>`}
+
           ${report
             ? html`<div class="verdict">
                 <div class="verdict-l">Latest evaluation report</div>
@@ -711,7 +795,8 @@
               </div>`
             : html`<${Stub} icon="reports" title="No report yet"
                      body="A full evaluation report and research package are produced at the end of each run." />`}
-        <//>`,
+        <//>`;
+      },
 
       library: () => html`
         <${React.Fragment}>

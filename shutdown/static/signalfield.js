@@ -89,8 +89,8 @@ export function mountSignalField(canvas, opts = {}) {
       uniforms: {
         iResolution: { value: [1, 1] },
         iTime: { value: 0 },
-        uAmber: { value: opts.amber || [0.788, 0.541, 0.247] },
-        uCyan: { value: opts.cyan || [0.290, 0.541, 0.510] },
+        uAmber: { value: opts.amber || [0.204, 0.329, 0.820] },  /* --control indigo */
+        uCyan: { value: opts.cyan || [0.486, 0.361, 0.749] },    /* --meta violet */
         uDensity: { value: opts.density ?? 26 },
         uSpeed: { value: opts.speed ?? 0.5 },
         uOpacity: { value: opts.opacity ?? 0.55 },

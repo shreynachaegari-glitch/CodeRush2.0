@@ -6,13 +6,13 @@
    investigation unfolding — motion here carries meaning, not decoration. */
 (function () {
   const REL = {
-    supports:    { color: "#6fae6f", label: "supports" },
-    weakens:     { color: "#c98a3f", label: "weakens" },
-    refutes:     { color: "#b0402f", label: "refutes" },
-    unknown:     { color: "#5c6a7d", label: "unknown" },
-    verified_by: { color: "#4a8a82", label: "verified by" },
+    supports:    { color: "#1f8a55", label: "supports" },
+    weakens:     { color: "#b3790f", label: "weakens" },
+    refutes:     { color: "#c23b2e", label: "refutes" },
+    unknown:     { color: "#98a0ab", label: "unknown" },
+    verified_by: { color: "#7c5cbf", label: "verified by" },
   };
-  const STATUS = { survived: "#6fae6f", eliminated: "#b0402f", alive: "#c98a3f" };
+  const STATUS = { survived: "#1f8a55", eliminated: "#c23b2e", alive: "#b3790f" };
 
   class EvidenceGraph {
     constructor(canvas) {
@@ -183,19 +183,19 @@
           g.beginPath(); g.arc(0, 0, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (n.confidence || 0));
           g.strokeStyle = col; g.lineWidth = 3; g.lineCap = "round"; g.stroke();
           g.beginPath(); g.arc(0, 0, r, 0, 7); g.strokeStyle = col + "33"; g.lineWidth = 3; g.stroke();
-          g.fillStyle = "#0d1310"; g.beginPath(); g.arc(0, 0, r - 4, 0, 7); g.fill();
+          g.fillStyle = "#ffffff"; g.beginPath(); g.arc(0, 0, r - 4, 0, 7); g.fill();
           g.fillStyle = col; g.font = "600 10px ui-monospace, monospace";
           g.textAlign = "center"; g.textBaseline = "middle";
           g.fillText(Math.round((n.confidence || 0) * 100), 0, 0);
         } else if (n.kind === "verification") {
           g.rotate(Math.PI / 4);
-          g.fillStyle = "#4a8a8222"; g.strokeStyle = "#4a8a82"; g.lineWidth = 1.4;
+          g.fillStyle = "#7c5cbf22"; g.strokeStyle = "#7c5cbf"; g.lineWidth = 1.4;
           g.fillRect(-r, -r, r * 2, r * 2); g.strokeRect(-r, -r, r * 2, r * 2);
         } else {
           g.beginPath(); g.arc(0, 0, r, 0, 7);
-          g.fillStyle = "#131a16"; g.fill();
-          g.strokeStyle = "#2c382f"; g.lineWidth = 1.3; g.stroke();
-          g.beginPath(); g.arc(0, 0, 3, 0, 7); g.fillStyle = "#a3ab9f"; g.fill();
+          g.fillStyle = "#f1f2f5"; g.fill();
+          g.strokeStyle = "#d6dade"; g.lineWidth = 1.3; g.stroke();
+          g.beginPath(); g.arc(0, 0, 3, 0, 7); g.fillStyle = "#5b626e"; g.fill();
         }
         g.restore();
       }
@@ -229,11 +229,11 @@
       if (y + h > this.h) y = this.h - h - 4;
 
       g.save();
-      g.fillStyle = "rgba(10,13,18,.96)"; g.strokeStyle = "#2a3646"; g.lineWidth = 1;
+      g.fillStyle = "rgba(255,255,255,.97)"; g.strokeStyle = "#d6dade"; g.lineWidth = 1;
       g.beginPath(); g.roundRect(x, y, w, h, 9); g.fill(); g.stroke();
       g.textAlign = "left"; g.textBaseline = "top";
       wrap.forEach((l, i) => {
-        g.fillStyle = i === 0 ? "#e8eef6" : "#8fa0b4";
+        g.fillStyle = i === 0 ? "#171a1f" : "#5b626e";
         g.font = i === 0 ? "500 12px Inter, sans-serif" : "11px ui-monospace, monospace";
         g.fillText(l, x + 10, y + 8 + i * 17);
       });
