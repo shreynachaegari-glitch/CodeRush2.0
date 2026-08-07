@@ -69,7 +69,7 @@ def _publish(run_id: str, event: str, payload: dict) -> None:
     ch.events.put(item)
 
 
-def _investigate(client_run_id: str, question: str, pdf_path: Path | None) -> None:
+def _investigate(client_run_id: str, question: str, pdf_path: Path | None, use_demo_assets: bool) -> None:
     """Runs on a worker thread. Every exit path must mark the channel done, or
     the browser sits on an open stream waiting for events that never come."""
     with _channels_lock:
@@ -81,7 +81,8 @@ def _investigate(client_run_id: str, question: str, pdf_path: Path | None) -> No
         profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
 
         _publish(client_run_id, "backend", {"llm": type(llm).__name__,
-                                            "model": getattr(llm, "_model_name", "mock")})
+                                            "model": getattr(llm, "_model_name", "mock"),
+                                            "fallback_reason": getattr(llm, "fallback_reason", None)})
 
         def sink(event: str, payload: dict) -> None:
             if event == "run_started":
@@ -90,6 +91,7 @@ def _investigate(client_run_id: str, question: str, pdf_path: Path | None) -> No
 
         real_run_id = run_investigation(
             store, llm, question, profile, emit=sink, spec_pdf=pdf_path,
+            use_demo_assets=use_demo_assets,
         )
 
         report = report_for_run(store, real_run_id)
@@ -111,6 +113,9 @@ def _investigate(client_run_id: str, question: str, pdf_path: Path | None) -> No
 async def start_run(request: Request) -> JSONResponse:
     form = await request.form()
     question = (form.get("question") or "").strip()
+    # explicit opt-in only -- the bundled satellite PDF/CSV must never attach
+    # itself to a run just because no document was uploaded
+    use_demo_assets = (form.get("demo") or "").strip() == "1"
     if not question:
         return JSONResponse({"error": "A research question is required."}, status_code=400)
 
@@ -128,7 +133,7 @@ async def start_run(request: Request) -> JSONResponse:
     with _channels_lock:
         _channels[client_run_id] = RunChannel()
 
-    threading.Thread(target=_investigate, args=(client_run_id, question, pdf_path), daemon=True).start()
+    threading.Thread(target=_investigate, args=(client_run_id, question, pdf_path, use_demo_assets), daemon=True).start()
     return JSONResponse({"run_id": client_run_id, "document": pdf_path.name if pdf_path else None})
 
 
@@ -177,6 +182,9 @@ async def health(request: Request) -> JSONResponse:
         "backend": type(llm).__name__,
         "model": getattr(llm, "_model_name", "mock"),
         "live": type(llm).__name__ != "MockLLM",
+        # set only when a configured key existed but the real client still
+        # failed to construct -- distinct from "no key configured at all"
+        "fallback_reason": getattr(llm, "fallback_reason", None),
     })
 
 

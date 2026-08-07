@@ -32,7 +32,15 @@ class MockLLM(LLMClient):
     """Deterministic canned responses keyed on system-prompt content, for offline
     smoke tests. Speaks the exact JSON contract each real caller expects
     (hypothesis.py / contradiction.py), so swapping in a real client changes
-    nothing about how the rest of the system parses the reply."""
+    nothing about how the rest of the system parses the reply.
+
+    `fallback_reason` is set by `get_default_client()` when this was returned
+    *instead of* a real client that failed to construct -- as opposed to being
+    returned because no key was configured at all. The UI surfaces this
+    distinction: "no key set" is expected; "your key failed to initialize" is
+    a problem the user needs to know about, not something to discover by
+    noticing every response looks like a satellite bus."""
+    fallback_reason: str | None = None
 
     def complete(self, prompt: str, *, system: str = "") -> str:
         self.last_usage_tokens = (len(prompt) + len(system)) // 4  # rough offline estimate, no real tokenizer
@@ -80,8 +88,17 @@ def get_default_client() -> LLMClient:
     if any(os.environ.get(k) for k in _KEY_ENV_VARS):
         try:
             return _RealLLM()
-        except Exception:
-            pass
+        except Exception as exc:
+            # A key is set but the real client still failed to come up (bad
+            # key, network error, missing SDK). This used to fail silently --
+            # the run would proceed on MockLLM and every "investigation"
+            # would return the same canned satellite hypotheses regardless of
+            # what was asked, with nothing telling you why.
+            print(f"WARNING: real LLM client failed to initialize ({type(exc).__name__}: {exc}); "
+                  f"falling back to MockLLM -- responses will NOT reflect your question or the API key.")
+            mock = MockLLM()
+            mock.fallback_reason = f"{type(exc).__name__}: {exc}"
+            return mock
     return MockLLM()
 
 

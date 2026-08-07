@@ -78,19 +78,26 @@ def _noop_emit(event: str, payload: dict) -> None:
 def run_investigation(store: Store, llm, question: str, profile: dict,
                       emit=_noop_emit,
                       spec_pdf: Path | None = None,
-                      dataset_csv: Path | None = None) -> str:
-    """`spec_pdf` is the primary document under investigation.
+                      dataset_csv: Path | None = None,
+                      use_demo_assets: bool = False) -> str:
+    """`spec_pdf` is the primary document under investigation, if any.
 
-    Passing one marks this as a *user-document* run, which changes two things:
-    the bundled demo CSV is not attached (someone investigating their own
-    report does not want a satellite thermal table cited as evidence for it),
-    and the document is read against **every** hypothesis rather than only the
-    first — if you upload a document, you want it examined against all of the
-    competing claims, not one of them.
+    Passing one marks this as a *user-document* run: the document is read
+    against **every** hypothesis in round 1 (not just the first), because if
+    you upload a document you want it examined against all of the competing
+    claims, not one of them.
+
+    `use_demo_assets` is the *only* path to the bundled satellite PDF/CSV —
+    it must be requested explicitly (the CLI demo, or an explicit "try the
+    demo" action in the UI). A plain research question with no upload and no
+    demo flag gets no document leg at all; it was previously silently
+    defaulting to the satellite spec sheet for every question, which is not
+    what "investigate this question" means.
     """
     user_document = spec_pdf is not None
-    spec_pdf = SPEC_SHEET_PDF if spec_pdf is None else spec_pdf
-    if dataset_csv is None and not user_document:
+    if spec_pdf is None and use_demo_assets:
+        spec_pdf = SPEC_SHEET_PDF
+    if dataset_csv is None and use_demo_assets and not user_document:
         dataset_csv = THERMAL_DATASET_CSV
     run_id = new_id()
 
@@ -120,7 +127,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
 
     emit("run_started", {"run_id": run_id, "question": question,
                          "strategy_version_id": active["version_id"], "deltas": deltas,
-                         "document": spec_pdf.name if spec_pdf.exists() else None,
+                         "document": spec_pdf.name if spec_pdf and spec_pdf.exists() else None,
                          "user_document": user_document})
 
     emit("stage", {"stage": "framing", "status": "active"})
@@ -177,7 +184,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
             # just the first, so the rest of the run exercises live search.
             evidence_confidence = 0.6  # default for non-web legs (PDF/CSV/code -- already vetted, not search noise)
             read_document = round_number == 1 and (user_document or step is plan[0])
-            if read_document and spec_pdf.exists():
+            if read_document and spec_pdf is not None and spec_pdf.exists():
                 source_ref = str(spec_pdf)
                 emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": source_ref, "kind": "document"})
                 fetch = contradiction_mod.fetch(source_ref)
@@ -449,7 +456,7 @@ def main():
         "For a LEO swarm satellite communication system, does enforcing single-master "
         "bus arbitration keep peak power draw within the swarm's thermal budget?"
     )
-    run_id = run_investigation(store, llm, question, profile)
+    run_id = run_investigation(store, llm, question, profile, use_demo_assets=True)
 
     print(render_trace_cli(store, run_id))
     print("\n--- evaluation report ---")

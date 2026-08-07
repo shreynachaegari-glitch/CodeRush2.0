@@ -365,11 +365,18 @@
     </div>`;
 
   /* ── app ──────────────────────────────────────────────── */
-  const DEFAULT_Q = "For a LEO swarm satellite communication system, does enforcing single-master bus arbitration keep peak power draw within the swarm's thermal budget?";
+  // The one built-in scenario -- reachable only via the explicit "Try the
+  // demo" action, never as a pre-filled default. A blank composer makes it
+  // obvious the agent is waiting on *your* question; a pre-filled satellite
+  // question invited running the demo by accident and mistaking every result
+  // for a bug, because typing a different question and re-running without
+  // clearing the text silently re-ran the same demo scenario.
+  const DEMO_Q = "For a LEO swarm satellite communication system, does enforcing single-master bus arbitration keep peak power draw within the swarm's thermal budget?";
 
   function App() {
     const [view, setView] = useState("workspace");
-    const [q, setQ] = useState(DEFAULT_Q);
+    const [q, setQ] = useState("");
+    const [isDemo, setIsDemo] = useState(false);
     const [file, setFile] = useState(null);
     const [over, setOver] = useState(false);
     const [running, setRunning] = useState(false);
@@ -415,6 +422,7 @@
       const fd = new FormData();
       fd.append("question", q);
       if (file) fd.append("document", file);
+      if (isDemo && !file) fd.append("demo", "1");
 
       let id;
       try {
@@ -427,7 +435,11 @@
       const es = new EventSource(`/api/events/${id}`);
       const on = (n, f) => es.addEventListener(n, (m) => f(JSON.parse(m.data)));
 
-      on("backend", (d) => log(`backend ${d.llm} · ${d.model}`));
+      on("backend", (d) => {
+        log(`backend ${d.llm} · ${d.model}`, !!d.fallback_reason);
+        setBackend((b) => ({ ...(b || {}), backend: d.llm, model: d.model,
+                            live: d.llm !== "MockLLM", fallback_reason: d.fallback_reason }));
+      });
       on("run_started", (d) => {
         setDocName(d.document); setStoreRunId(d.run_id); setStrategyId(d.strategy_version_id);
         log(`run ${d.run_id} · strategy ${String(d.strategy_version_id).slice(0, 7)}`);
@@ -476,21 +488,35 @@
             <span class="sub">${docName ? docName : "falsification-driven investigation"}</span>
           </div>
 
+          ${backend?.fallback_reason && html`
+            <div class="err-box" style=${{ marginBottom: 16 }}>
+              <${Icon} name="shieldAlert" size=16 />
+              <div>
+                Your configured API key failed to initialize a real model — every run right now uses the
+                offline mock, which returns fixed demo hypotheses regardless of your question or document.
+                <span class="hint">${backend.fallback_reason}</span>
+              </div>
+            </div>`}
+
           <div class="composer">
-            <textarea rows="3" value=${q} disabled=${running} placeholder="What claim should be tested?"
-                      onChange=${(e) => setQ(e.target.value)} />
+            <textarea rows="3" value=${q} disabled=${running} placeholder="What claim should be tested? e.g. Does X hold under Y conditions..."
+                      onChange=${(e) => { setQ(e.target.value); setIsDemo(false); }} />
             <div class="composer-b">
               <div class="chip-btn ${file ? "set" : ""} ${over ? "over" : ""}"
                    onClick=${() => fileRef.current.click()}
                    onDragOver=${(e) => { e.preventDefault(); setOver(true); }}
                    onDragLeave=${() => setOver(false)}
-                   onDrop=${(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) setFile(f); }}>
+                   onDrop=${(e) => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) { setFile(f); setIsDemo(false); } }}>
                 <input ref=${fileRef} type="file" accept="application/pdf" style=${{ display: "none" }}
-                       onChange=${(e) => e.target.files[0] && setFile(e.target.files[0])} />
+                       onChange=${(e) => { if (e.target.files[0]) { setFile(e.target.files[0]); setIsDemo(false); } }} />
                 <${Icon} name=${file ? "doc" : "upload"} size=14 />
                 ${file ? html`<span class="nm">${file.name}</span>` : html`<span>Attach PDF</span>`}
               </div>
               ${file && !running && html`<button class="ghost-btn" onClick=${() => setFile(null)}>remove</button>`}
+              ${!running && !isDemo && html`
+                <button class="ghost-btn" onClick=${() => { setQ(DEMO_Q); setFile(null); setIsDemo(true); }}>
+                  <${Icon} name="satellite" size=13 /> Try the demo
+                </button>`}
               <button class="run-btn" onClick=${launch} disabled=${running || !q.trim()}>
                 <${Icon} name=${running ? "clock" : "hunt"} size=14 />
                 ${running ? html`<span class="dots">Investigating</span>` : "Run investigation"}
@@ -498,10 +524,10 @@
             </div>
           </div>
 
-          ${file && !running && q === DEFAULT_Q && html`
-            <div style=${{ marginTop: 12, fontSize: 12.5, color: WARN, display: "flex", gap: 8 }}>
-              <${Icon} name="shieldAlert" size=15 />
-              <span>A document is attached but the question is still the built-in satellite one — edit it to ask about <b>${file.name}</b>.</span>
+          ${isDemo && !running && html`
+            <div style=${{ marginTop: 12, fontSize: 12.5, color: "var(--fg-3)", display: "flex", gap: 8 }}>
+              <${Icon} name="satellite" size=15 />
+              <span>Demo scenario loaded — uses the bundled satellite spec sheet (with a planted prompt injection) and thermal dataset. Edit the question or attach your own PDF to leave demo mode.</span>
             </div>`}
 
           ${err && html`
