@@ -205,35 +205,6 @@ async def list_runs(request: Request) -> JSONResponse:
     return JSONResponse(out)
 
 
-async def run_graph(request: Request) -> JSONResponse:
-    """Evidence graph as nodes+edges, which is what the visualisation needs --
-    the stored shape is hypothesis-centric and would force the client to
-    re-derive the topology on every frame."""
-    from .evidence import graph_for_run
-
-    store = Store(DB_PATH)
-    rid = request.path_params["run_id"]
-    g = graph_for_run(store, rid)
-
-    nodes, edges, seen = [], [], set()
-    for h in g["hypotheses"]:
-        nodes.append({"id": h["hypothesis_id"], "kind": "hypothesis", "label": h["statement"],
-                      "confidence": h["confidence"], "status": h["status"]})
-        for e in h["evidence"]:
-            sid = e["source_id"]
-            if sid not in seen:
-                seen.add(sid)
-                nodes.append({
-                    "id": sid,
-                    "kind": "verification" if e["source_type"] == "code_output" else "source",
-                    "label": e["url_or_path"], "source_type": e["source_type"],
-                })
-            edges.append({"from": sid, "to": h["hypothesis_id"], "relation": e["relation"],
-                          "weight": e["confidence"], "reason": e["transformation"],
-                          "at": e["timestamp"], "cls": e["contradiction_class"]})
-    return JSONResponse({"run_id": rid, "nodes": nodes, "edges": edges})
-
-
 async def strategies(request: Request) -> JSONResponse:
     store = Store(DB_PATH)
     versions = [dict(r) for r in store.read(
@@ -251,7 +222,6 @@ routes = [
     Route("/api/run", start_run, methods=["POST"]),
     Route("/api/events/{run_id}", stream),
     Route("/api/runs", list_runs),
-    Route("/api/graph/{run_id}", run_graph),
     Route("/api/strategies", strategies),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),
 ]

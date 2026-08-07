@@ -8,11 +8,15 @@ Windows too, where `resource` isn't available).
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from .llm import LLMClient
 
 TIMEOUT_SECONDS = 8
 MAX_OUTPUT_CHARS = 4000
@@ -88,3 +92,55 @@ print(f"FSPL_dB={{fspl_db:.3f}}")
 print(f"received_power_dBW={{received_dbw:.3f}}")
 """
     return run_sandboxed(code)
+
+
+VERIFIER_SYSTEM = (
+    "You are the Verification Agent inside Shutdown, a falsification-driven research agent. "
+    "You are given a hypothesis and the evidence gathered for it so far. Look for a concrete, "
+    "closed-form, numeric claim actually stated in the hypothesis or evidence (a formula, a "
+    "threshold, a ratio, an inequality, a unit conversion) that can be independently recomputed "
+    "from stdlib Python alone (math module only, no external data, no network, no file access). "
+    "If one exists, respond with ONLY a fenced python code block that recomputes it from the "
+    "numbers given and prints each intermediate quantity plus a final PASS/FAIL line comparing "
+    "the recomputed value against the claimed one. If no such self-contained numeric claim exists "
+    "in the hypothesis or evidence -- e.g. the claim is qualitative, or recomputing it would "
+    "require data not given here -- respond with ONLY:\n"
+    "NOT_VERIFIABLE: <one-sentence reason>\n"
+    "Never fabricate numbers that were not given in the hypothesis or evidence."
+)
+
+
+def _extract_code(raw: str) -> str | None:
+    m = re.search(r"```(?:python)?\s*(.*?)```", raw, flags=re.DOTALL)
+    return m.group(1).strip() if m else None
+
+
+@dataclass
+class ClaimVerification:
+    verifiable: bool
+    reason: str  # populated when not verifiable
+    result: VerificationResult | None = None
+
+
+def verify_claim(llm: LLMClient, hypothesis_statement: str, evidence_excerpts: list[str]) -> ClaimVerification:
+    """Grounds the "Verification Agent" stage in the actual run instead of a
+    fixed satellite link-budget formula: asks the model to recompute a real
+    numeric claim from THIS hypothesis's own evidence, sandboxed, or say
+    honestly that nothing here is closed-form recomputable. A hardcoded
+    formula run against every question regardless of domain would be
+    evidence that was never really checked -- worse than admitting there's
+    nothing to verify.
+    """
+    joined = "\n---\n".join(e.strip()[:800] for e in evidence_excerpts if e.strip())[:3000]
+    prompt = f"Hypothesis: {hypothesis_statement}\n\nEvidence gathered so far:\n{joined or '(none yet)'}"
+    raw = llm.complete(prompt, system=VERIFIER_SYSTEM).strip()
+
+    if raw.upper().startswith("NOT_VERIFIABLE"):
+        reason = raw.split(":", 1)[1].strip() if ":" in raw else "no closed-form numeric claim identified"
+        return ClaimVerification(verifiable=False, reason=reason)
+
+    code = _extract_code(raw)
+    if not code:
+        return ClaimVerification(verifiable=False, reason="model did not return a recomputable snippet")
+
+    return ClaimVerification(verifiable=True, reason="", result=run_sandboxed(code))

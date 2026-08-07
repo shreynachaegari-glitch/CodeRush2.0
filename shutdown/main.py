@@ -22,7 +22,7 @@ from .metrics import render_report_table, report_for_run
 from .planner import build_plan, should_replan, stop_condition_met
 from .search import hybrid_search
 from .trace import build_research_package, render_trace_cli, render_trace_html
-from .verification import recompute_link_budget
+from .verification import recompute_link_budget, verify_claim
 
 PROFILE_PATH = Path(__file__).parent / "profiles" / "communications.json"
 HELD_OUT_PATH = Path(__file__).parent / "held_out_set.json"
@@ -130,8 +130,24 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
                          "document": spec_pdf.name if spec_pdf and spec_pdf.exists() else None,
                          "user_document": user_document})
 
+    # Fetch the document once, up front, rather than re-parsing the PDF on
+    # every round-1 step below -- and so the excerpt can ground hypothesis
+    # framing itself. Previously a user's uploaded document was only ever
+    # checked against hypotheses framed BLIND to it (from the typed question
+    # alone), so an upload could sail through a whole run without actually
+    # shaping what was investigated.
+    document_fetch = None
+    if spec_pdf is not None and spec_pdf.exists():
+        document_fetch = contradiction_mod.fetch(str(spec_pdf))
+
     emit("stage", {"stage": "framing", "status": "active"})
-    hyps = frame_hypotheses(store, llm, run_id, question, profile)
+    # A planted-instruction document must never reach the framing prompt --
+    # it goes through the normal injection-refusal path in the round loop
+    # instead, same as any other untrusted fetch.
+    document_excerpt = (document_fetch.content[:3000]
+                        if user_document and document_fetch and not document_fetch.injection_flagged
+                        else None)
+    hyps = frame_hypotheses(store, llm, run_id, question, profile, document_excerpt=document_excerpt)
     _track_cost(store, run_id, llm)
     emit("hypotheses", {"hypotheses": [
         {"id": h.hypothesis_id, "statement": h.statement, "confidence": h.confidence_current,
@@ -184,10 +200,10 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
             # just the first, so the rest of the run exercises live search.
             evidence_confidence = 0.6  # default for non-web legs (PDF/CSV/code -- already vetted, not search noise)
             read_document = round_number == 1 and (user_document or step is plan[0])
-            if read_document and spec_pdf is not None and spec_pdf.exists():
+            if read_document and document_fetch is not None:
                 source_ref = str(spec_pdf)
                 emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": source_ref, "kind": "document"})
-                fetch = contradiction_mod.fetch(source_ref)
+                fetch = document_fetch  # already parsed once, up front -- reuse rather than re-parse per hypothesis
             else:
                 # Literature first. A peer-reviewed paper with a DOI and a
                 # citation count is evidence; a general web page usually isn't.
@@ -255,10 +271,19 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
                 })
                 continue
 
-            contradicts, cls, reason = contradiction_mod.detect_contradiction(llm, hyp.statement, fetch.content)
+            contradicts, cls, reason, relevant = contradiction_mod.detect_contradiction(llm, hyp.statement, fetch.content)
             _track_cost(store, run_id, llm)
-            relation = "refutes" if contradicts else "supports"
-            evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, relation, cls, evidence_confidence, reason or "search result")
+            # A source that never actually addresses the hypothesis is not
+            # support for it -- previously "no contradiction found" defaulted
+            # straight to "supports" even for an unrelated document, which
+            # meant an irrelevant upload could still bump confidence up.
+            if not relevant:
+                relation = "unknown"
+                evidence_confidence = 0.0
+            else:
+                relation = "refutes" if contradicts else "supports"
+            evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, relation, cls, evidence_confidence,
+                                       reason or ("search result" if relevant else "evidence does not address this hypothesis"))
             new_conf = evidence_mod.update_confidence(store, hyp.hypothesis_id, relation, deltas=deltas)
             hyp.confidence_current = new_conf
             # keep the in-memory copy in step with the store: build_plan() and
@@ -287,17 +312,59 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
         break
     emit("stage", {"stage": "hunting", "status": "done"})
 
-    # -- verification agent: recompute a closed-form claim for this domain
+    # -- verification agent: recompute a closed-form claim for this domain.
+    # The bundled satellite demo keeps its polished, known-good link-budget
+    # recompute; a real question gets a real check grounded in what THIS run
+    # actually found -- the model is asked to extract an actual numeric claim
+    # from the hypothesis/evidence and recompute it, or say honestly that
+    # nothing here is closed-form recomputable. Running the satellite formula
+    # against every question regardless of domain would be evidence that was
+    # never really checked.
     emit("stage", {"stage": "verifying", "status": "active"})
-    verify = recompute_link_budget(distance_km=550, freq_ghz=12.0, tx_power_dbw=10.0, ant_gain_db=30.0)
-    if verify.ok:
-        for h in hyps:
-            source_id = evidence_mod.add_source(store, run_id, "sandbox://link_budget_recompute", "code_output",
-                                                 verify.stdout, False, "")
-            evidence_mod.add_evidence(store, h.hypothesis_id, source_id, "supports", None, 0.8,
-                                       f"independent recompute: {verify.stdout.strip()}")
-    emit("verification", {"ok": verify.ok, "stdout": verify.stdout.strip(),
-                          "timed_out": verify.timed_out})
+    if use_demo_assets and not user_document:
+        verify = recompute_link_budget(distance_km=550, freq_ghz=12.0, tx_power_dbw=10.0, ant_gain_db=30.0)
+        if verify.ok:
+            for h in hyps:
+                source_id = evidence_mod.add_source(store, run_id, "sandbox://link_budget_recompute", "code_output",
+                                                     verify.stdout, False, "")
+                evidence_mod.add_evidence(store, h.hypothesis_id, source_id, "supports", None, 0.8,
+                                           f"independent recompute: {verify.stdout.strip()}")
+        emit("verification", {"ok": verify.ok, "stdout": verify.stdout.strip(),
+                              "timed_out": verify.timed_out, "verifiable": True})
+    elif hyps:
+        # verify against the lead hypothesis -- the one the evidence gathered
+        # so far actually points at, not an arbitrary pick
+        lead = max(hyps, key=lambda h: h.confidence_current)
+        excerpts = [row["transformation"] for row in store.read(
+            "SELECT transformation FROM evidence WHERE hypothesis_id = ? ORDER BY timestamp", (lead.hypothesis_id,)
+        )]
+        claim = verify_claim(llm, lead.statement, excerpts)
+        _track_cost(store, run_id, llm)
+        if not claim.verifiable:
+            emit("verification", {"ok": False, "verifiable": False, "reason": claim.reason,
+                                  "hypothesis_id": lead.hypothesis_id})
+        else:
+            verify = claim.result
+            stdout = verify.stdout.strip()
+            failed = "FAIL" in stdout.upper()
+            if verify.ok and not failed:
+                relation = "supports"
+            elif verify.ok and failed:
+                relation = "refutes"
+            else:
+                relation = None  # sandbox errored/timed out -- not evidence either way
+            if relation is not None:
+                source_id = evidence_mod.add_source(store, run_id, "sandbox://claim_recompute", "code_output",
+                                                     stdout, False, "")
+                evidence_mod.add_evidence(store, lead.hypothesis_id, source_id, relation, None, 0.75,
+                                           f"independent recompute: {stdout}")
+                new_conf = evidence_mod.update_confidence(store, lead.hypothesis_id, relation, deltas=deltas)
+                lead.confidence_current = new_conf
+                lead.status = evidence_mod.classify(new_conf)
+            emit("verification", {"ok": verify.ok, "stdout": stdout, "timed_out": verify.timed_out,
+                                  "verifiable": True, "hypothesis_id": lead.hypothesis_id, "relation": relation})
+    else:
+        emit("verification", {"ok": False, "verifiable": False, "reason": "no hypotheses to verify"})
     emit("stage", {"stage": "verifying", "status": "done"})
 
     # -- meta plane: the Teacher reviews what THIS run actually did and writes

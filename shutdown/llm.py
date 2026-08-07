@@ -67,9 +67,15 @@ class MockLLM(LLMClient):
                 ]
             )
         if "contradiction hunter" in s:
-            return json.dumps({"contradicts": False, "class": None, "reason": "no same-conditions conflict found"})
+            return json.dumps({"relevant": True, "contradicts": False, "class": None,
+                               "reason": "no same-conditions conflict found"})
         if "root cause" in s or "critique" in s:
             return "Extraction prompt did not request explicit arbitration-mode fields from spec-sheet tables."
+        if "verification agent" in s:
+            # Honest offline behavior: MockLLM can't actually read the evidence
+            # for a numeric claim, so it says so rather than fabricating a
+            # recompute -- same standard a real model is held to.
+            return "NOT_VERIFIABLE: offline mock cannot extract a numeric claim from arbitrary evidence"
         return "ack"
 
 
@@ -103,47 +109,99 @@ def get_default_client() -> LLMClient:
 
 
 class _RealLLM(LLMClient):
-    """Thin wrapper picking whichever provider has a key set. Kept optional/lazy-imported."""
+    """Builds every provider that has a key configured, in priority order, and
+    tries them in that order. Gemini's free tier is capped at 20 requests/day
+    project-wide -- a demo mid-investigation used to just die (or silently
+    fall back to MockLLM, returning canned satellite content for whatever the
+    user actually asked). Now a dead/exhausted provider gets skipped for the
+    REST OF THIS RUN and the next configured one takes over, instead of
+    aborting or degrading to the mock without saying so.
+    """
+
+    _PROVIDER_ORDER = ("gemini", "nvidia", "nvidia2", "openai", "anthropic")
 
     def __init__(self):
-        if os.environ.get("GEMINI_API_KEY"):
-            from google import genai
-
-            self._client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-            # alias, not a pinned version -- tracks whatever "flash" currently
-            # resolves to instead of going stale when a dated model is retired
-            self._model_name = "gemini-flash-latest"
-            self._kind = "gemini"
-        elif os.environ.get("NVIDIA_API_KEY"):
-            # NVIDIA NIM speaks the OpenAI wire format, so it reuses that client
-            # with a different base_url. Kept as a first-class backend because
-            # the Gemini free tier is capped at 20 requests/day -- rehearsing a
-            # demo can exhaust it, and "the model provider rate-limited us" is a
-            # bad thing to discover on stage. Set NVIDIA_API_KEY to switch.
-            from openai import OpenAI
-
-            self._client = OpenAI(
-                api_key=os.environ["NVIDIA_API_KEY"],
-                base_url=os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-            )
-            self._model_name = os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
-            self._kind = "openai_compatible"
-        elif os.environ.get("OPENAI_API_KEY"):
-            from openai import OpenAI
-
-            self._client = OpenAI()
-            self._model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-            self._kind = "openai_compatible"
-        elif os.environ.get("ANTHROPIC_API_KEY"):
-            import anthropic
-
-            self._client = anthropic.Anthropic()
-            self._kind = "anthropic"
-        else:
+        self._backends: list[tuple[str, object, str | None]] = []
+        for kind in self._PROVIDER_ORDER:
+            backend = self._build(kind)
+            if backend:
+                self._backends.append(backend)
+        if not self._backends:
             raise RuntimeError("no API key configured")
+        self._active = 0
+        self._apply_active()
+
+    def _build(self, kind: str) -> tuple[str, object, str | None] | None:
+        try:
+            if kind == "gemini" and os.environ.get("GEMINI_API_KEY"):
+                from google import genai
+
+                client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+                # alias, not a pinned version -- tracks whatever "flash" currently
+                # resolves to instead of going stale when a dated model is retired
+                return ("gemini", client, "gemini-flash-latest")
+            if kind == "nvidia" and os.environ.get("NVIDIA_API_KEY"):
+                # NVIDIA NIM speaks the OpenAI wire format, so it reuses that
+                # client with a different base_url -- a separate free tier
+                # from Gemini's, so it's the first fallback when Gemini's
+                # daily cap is hit rather than a rarely-used alternative.
+                from openai import OpenAI
+
+                client = OpenAI(
+                    api_key=os.environ["NVIDIA_API_KEY"],
+                    base_url=os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+                )
+                return ("openai_compatible", client, os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"))
+            if kind == "nvidia2" and os.environ.get("NVIDIA_API_KEY_2"):
+                # A second NVIDIA key/model pair -- its own separate quota pool,
+                # so a run survives even if the first NVIDIA key is also
+                # rate-limited (e.g. two keys under different accounts).
+                from openai import OpenAI
+
+                client = OpenAI(
+                    api_key=os.environ["NVIDIA_API_KEY_2"],
+                    base_url=os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+                )
+                return ("openai_compatible", client, os.environ.get("NVIDIA_MODEL_2", "meta/llama-3.3-70b-instruct"))
+            if kind == "openai" and os.environ.get("OPENAI_API_KEY"):
+                from openai import OpenAI
+
+                return ("openai_compatible", OpenAI(), os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
+            if kind == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
+                import anthropic
+
+                return ("anthropic", anthropic.Anthropic(), None)
+        except Exception as exc:
+            # a key is set but the SDK/client itself wouldn't come up (missing
+            # package, malformed key) -- skip it rather than taking the whole
+            # run down over one bad provider when another might work
+            print(f"WARNING: {kind} backend configured but failed to initialize "
+                  f"({type(exc).__name__}: {exc}); skipping it.")
+        return None
+
+    def _apply_active(self) -> None:
+        self._kind, self._client, self._model_name = self._backends[self._active]
 
     def complete(self, prompt: str, *, system: str = "") -> str:
-        return _with_retry(lambda: self._complete_once(prompt, system=system))
+        while True:
+            # Only the LAST remaining backend gets the full retry-with-backoff
+            # treatment (worth waiting out a real transient blip when there's
+            # nowhere else to go). Every earlier one gets a single attempt --
+            # a daily quota cap won't resolve itself in 3 backoff cycles, so
+            # burning ~10s retrying a dead provider before falling back just
+            # delays the run for no benefit.
+            is_last = self._active == len(self._backends) - 1
+            try:
+                return _with_retry(lambda: self._complete_once(prompt, system=system),
+                                   attempts=3 if is_last else 1)
+            except Exception as exc:
+                if is_last:
+                    raise
+                dead = self._kind
+                self._active += 1
+                self._apply_active()
+                print(f"WARNING: {dead} backend failed ({type(exc).__name__}: {exc}); "
+                      f"switching to {self._kind} for the rest of this run.")
 
     def _complete_once(self, prompt: str, *, system: str = "") -> str:
         if self._kind == "gemini":
