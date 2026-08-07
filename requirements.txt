@@ -16,3 +16,10 @@ google-genai>=1.0.0
 # Browser control -- real headless-browser fetch for JS-rendered pages
 # (falls back to plain requests.get() automatically if not installed)
 browser-use>=0.13.0
+
+# Web UI (python -m shutdown.web). These arrive transitively with browser-use
+# too, but the UI shouldn't silently break for anyone who skips that install.
+starlette>=0.37.0
+uvicorn>=0.30.0
+sse-starlette>=2.0.0
+python-multipart>=0.0.9

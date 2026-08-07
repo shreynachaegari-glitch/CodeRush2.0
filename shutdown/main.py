@@ -68,7 +68,19 @@ def _over_budget(store: Store, run_id: str) -> bool:
     return _tokens_spent(store, run_id) >= RUN_TOKEN_BUDGET
 
 
-def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
+def _noop_emit(event: str, payload: dict) -> None:
+    """Default event sink: the CLI doesn't need live events, it prints a trace
+    at the end. The web UI passes a real sink to drive its live view."""
+
+
+def run_investigation(store: Store, llm, question: str, profile: dict,
+                      emit=_noop_emit,
+                      spec_pdf: Path | None = None,
+                      dataset_csv: Path | None = None) -> str:
+    """`spec_pdf`/`dataset_csv` override the bundled demo assets, so an
+    uploaded document can be investigated instead of the built-in one."""
+    spec_pdf = SPEC_SHEET_PDF if spec_pdf is None else spec_pdf
+    dataset_csv = THERMAL_DATASET_CSV if dataset_csv is None else dataset_csv
     run_id = new_id()
 
     # Pin the strategy version for the whole run, and record which one it was.
@@ -95,24 +107,44 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
         },
     )
 
+    emit("run_started", {"run_id": run_id, "question": question,
+                         "strategy_version_id": active["version_id"], "deltas": deltas})
+
+    emit("stage", {"stage": "framing", "status": "active"})
     hyps = frame_hypotheses(store, llm, run_id, question, profile)
     _track_cost(store, run_id, llm)
+    emit("hypotheses", {"hypotheses": [
+        {"id": h.hypothesis_id, "statement": h.statement, "confidence": h.confidence_current,
+         "status": h.status, "kills_it": h.expected_contradicting_evidence}
+        for h in hyps
+    ]})
+    emit("stage", {"stage": "framing", "status": "done"})
 
     # -- structured dataset leg (CSV), logged once against the first hypothesis
     # up front, independent of the search loop below
-    if THERMAL_DATASET_CSV.exists() and hyps:
-        ds_fetch = contradiction_mod.fetch(str(THERMAL_DATASET_CSV))
-        ds_source_id = evidence_mod.add_source(store, run_id, str(THERMAL_DATASET_CSV), ds_fetch.source_type,
+    if dataset_csv.exists() and hyps:
+        ds_fetch = contradiction_mod.fetch(str(dataset_csv))
+        ds_source_id = evidence_mod.add_source(store, run_id, str(dataset_csv), ds_fetch.source_type,
                                                 ds_fetch.content, ds_fetch.injection_flagged, ds_fetch.injection_detail)
         evidence_mod.add_evidence(store, hyps[0].hypothesis_id, ds_source_id, "supports", None, 0.7,
                                    "structured dataset: per-component thermal/power budget table")
+        emit("evidence", {
+            "hypothesis_id": hyps[0].hypothesis_id, "relation": "supports", "confidence": 0.7,
+            "source": str(dataset_csv), "source_type": ds_fetch.source_type, "locator": "",
+            "reason": "structured dataset: per-component thermal/power budget table",
+            "excerpt": ds_fetch.content[:180],
+        })
 
     round_number = 1
     contradiction_found_ever = False
     budget_exhausted = False
 
+    emit("stage", {"stage": "hunting", "status": "active"})
     while not stop_condition_met(hyps, round_number) and not budget_exhausted:
         plan = build_plan(hyps, profile)
+        emit("round", {"round": round_number, "steps": [
+            {"hypothesis_id": s.hypothesis_id, "query": s.query} for s in plan
+        ]})
         round_contradiction = False
 
         for step in plan:
@@ -120,6 +152,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
                 # finalize on the evidence gathered so far rather than aborting --
                 # a partial answer with an honest cost record beats no answer
                 print(f"token budget ({RUN_TOKEN_BUDGET}) reached; finalizing on evidence gathered so far")
+                emit("budget_reached", {"budget": RUN_TOKEN_BUDGET})
                 budget_exhausted = True
                 break
 
@@ -127,10 +160,12 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
 
             # -- the PDF spec sheet (with its planted instruction), fetched once, for the demo beat
             evidence_confidence = 0.6  # default for non-web legs (PDF/CSV/code -- already vetted, not search noise)
-            if round_number == 1 and step is plan[0] and SPEC_SHEET_PDF.exists():
-                source_ref = str(SPEC_SHEET_PDF)
+            if round_number == 1 and step is plan[0] and spec_pdf.exists():
+                source_ref = str(spec_pdf)
+                emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": source_ref, "kind": "document"})
                 fetch = contradiction_mod.fetch(source_ref)
             else:
+                emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": step.query, "kind": "search"})
                 results = hybrid_search(step.query, max_results=3)
                 top = results[0] if results else None
                 # the real locator, kept verbatim -- a citation the reader can't
@@ -159,11 +194,20 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
                 # detected, logged, refused -- content is NOT passed to the planner as trusted evidence
                 evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, "unknown", None, 0.0,
                                            f"refused: injection detected ({fetch.injection_detail})")
+                emit("injection_refused", {
+                    "hypothesis_id": hyp.hypothesis_id, "source": source_ref,
+                    "locator": fetch.locator, "detail": fetch.injection_detail, "excerpt": fetch.excerpt,
+                })
                 continue
 
             if not usable:
                 evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, "unknown", None, 0.0,
                                            "fetch returned no usable content")
+                emit("evidence", {
+                    "hypothesis_id": hyp.hypothesis_id, "relation": "unknown", "confidence": 0.0,
+                    "source": source_ref, "source_type": fetch.source_type, "locator": "",
+                    "reason": "fetch returned no usable content", "excerpt": "",
+                })
                 continue
 
             contradicts, cls, reason = contradiction_mod.detect_contradiction(llm, hyp.statement, fetch.content)
@@ -172,6 +216,18 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
             evidence_mod.add_evidence(store, hyp.hypothesis_id, source_id, relation, cls, evidence_confidence, reason or "search result")
             new_conf = evidence_mod.update_confidence(store, hyp.hypothesis_id, relation, deltas=deltas)
             hyp.confidence_current = new_conf
+            # keep the in-memory copy in step with the store: build_plan() and
+            # stop_condition_met() both filter on .status, so a stale value here
+            # meant an eliminated hypothesis kept getting planned for
+            hyp.status = evidence_mod.classify(new_conf)
+            emit("evidence", {
+                "hypothesis_id": hyp.hypothesis_id, "relation": relation, "confidence": evidence_confidence,
+                "source": source_ref, "source_type": fetch.source_type,
+                "locator": fetch.locator, "contradiction_class": cls,
+                "reason": reason or "no same-conditions conflict found",
+                "excerpt": contradiction_mod.strip_page_marks(fetch.content)[:180].strip(),
+                "new_confidence": new_conf, "status": hyp.status,
+            })
             if contradicts:
                 round_contradiction = True
                 contradiction_found_ever = True
@@ -179,11 +235,15 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
         if budget_exhausted:
             break
         if should_replan(round_contradiction, round_number):
+            emit("replan", {"from_round": round_number, "to_round": round_number + 1,
+                            "why": "evidence contradicted a live hypothesis"})
             round_number += 1
             continue
         break
+    emit("stage", {"stage": "hunting", "status": "done"})
 
     # -- verification agent: recompute a closed-form claim for this domain
+    emit("stage", {"stage": "verifying", "status": "active"})
     verify = recompute_link_budget(distance_km=550, freq_ghz=12.0, tx_power_dbw=10.0, ant_gain_db=30.0)
     if verify.ok:
         for h in hyps:
@@ -191,8 +251,12 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
                                                  verify.stdout, False, "")
             evidence_mod.add_evidence(store, h.hypothesis_id, source_id, "supports", None, 0.8,
                                        f"independent recompute: {verify.stdout.strip()}")
+    emit("verification", {"ok": verify.ok, "stdout": verify.stdout.strip(),
+                          "timed_out": verify.timed_out})
+    emit("stage", {"stage": "verifying", "status": "done"})
 
     # -- meta plane: one failure this run surfaced becomes an evolution ticket
+    emit("stage", {"stage": "evolving", "status": "active"})
     gate = ApprovalGate(store)
     held_out = strategy_mod.load_held_out_set(HELD_OUT_PATH)
     ticket_id = strategy_mod.raise_ticket(
@@ -205,6 +269,13 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
         risk="Might over-penalize claims that recover with later supporting evidence",
     )
     eval_result = strategy_mod.evaluate_ticket(store, ticket_id, held_out)
+    emit("ticket", {
+        "ticket_id": ticket_id, "kind": "improvement",
+        "failure": "Weak-evidence sources were treated the same as strong ones.",
+        "proposed_diff": {"confidence_deltas": {"weakens": -0.10}},
+        "before": eval_result.get("before"), "after": eval_result.get("after"),
+        "improved": eval_result.get("improved"),
+    })
 
     approval_id = gate.request(
         run_id=run_id, action_type="promote_strategy", ticket_id=ticket_id,
@@ -212,6 +283,8 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
     )
     # presenter approves live if it actually improved; otherwise this is the rollback demo beat
     approved = bool(eval_result.get("improved"))
+    emit("approval", {"approval_id": approval_id, "action": "promote_strategy",
+                      "approved": approved, "context": eval_result})
     gate.resolve(approval_id, approved=approved)
     strategy_mod.finalize_ticket(store, ticket_id, approved=approved)
 
@@ -242,17 +315,32 @@ def run_investigation(store: Store, llm, question: str, profile: dict) -> str:
     print(f"rollback demo: bad version scored {rollback_demo['bad_version_accuracy']:.3f}, "
           f"restored version scores {rollback_demo['restored_version_accuracy']:.3f} "
           f"(rolled back to {rollback_demo['rolled_back_to']})")
+    emit("ticket", {
+        "ticket_id": bad_ticket_id, "kind": "regressive",
+        "failure": "Deliberately regressive proposal, to exercise the rollback path.",
+        "proposed_diff": {"confidence_deltas": {"refutes": 0.0}},
+        "before": bad_eval.get("before"), "after": bad_eval.get("after"),
+        "improved": bad_eval.get("improved"),
+    })
+    emit("rollback", rollback_demo)
+    emit("stage", {"stage": "evolving", "status": "done"})
 
     # -- publish gate
+    emit("stage", {"stage": "verdict", "status": "active"})
     graph_summary = {
         "hypotheses": [h.statement for h in hyps],
         "contradiction_found": contradiction_found_ever,
         "rollback_demo": rollback_demo,
     }
     publish_approval_id = gate.request(run_id=run_id, action_type="publish_verdict", context=graph_summary)
+    emit("approval", {"approval_id": publish_approval_id, "action": "publish_verdict",
+                      "approved": True, "context": graph_summary})
     gate.resolve(publish_approval_id, approved=True)
 
     store.update("runs", "run_id", run_id, {"status": "finalized", "finished_at": now()})
+    emit("stage", {"stage": "verdict", "status": "done"})
+    emit("finished", {"run_id": run_id, "report": report_for_run(store, run_id),
+                      "contradiction_found": contradiction_found_ever})
     return run_id
 
 

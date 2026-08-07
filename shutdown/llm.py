@@ -65,9 +65,12 @@ class MockLLM(LLMClient):
         return "ack"
 
 
+_KEY_ENV_VARS = ("GEMINI_API_KEY", "NVIDIA_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+
+
 def get_default_client() -> LLMClient:
     """Return a real client if a key is configured, else fall back to the mock."""
-    if os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
+    if any(os.environ.get(k) for k in _KEY_ENV_VARS):
         try:
             return _RealLLM()
         except Exception:
@@ -87,11 +90,26 @@ class _RealLLM(LLMClient):
             # resolves to instead of going stale when a dated model is retired
             self._model_name = "gemini-flash-latest"
             self._kind = "gemini"
+        elif os.environ.get("NVIDIA_API_KEY"):
+            # NVIDIA NIM speaks the OpenAI wire format, so it reuses that client
+            # with a different base_url. Kept as a first-class backend because
+            # the Gemini free tier is capped at 20 requests/day -- rehearsing a
+            # demo can exhaust it, and "the model provider rate-limited us" is a
+            # bad thing to discover on stage. Set NVIDIA_API_KEY to switch.
+            from openai import OpenAI
+
+            self._client = OpenAI(
+                api_key=os.environ["NVIDIA_API_KEY"],
+                base_url=os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+            )
+            self._model_name = os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
+            self._kind = "openai_compatible"
         elif os.environ.get("OPENAI_API_KEY"):
             from openai import OpenAI
 
             self._client = OpenAI()
-            self._kind = "openai"
+            self._model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+            self._kind = "openai_compatible"
         elif os.environ.get("ANTHROPIC_API_KEY"):
             import anthropic
 
@@ -117,14 +135,16 @@ class _RealLLM(LLMClient):
             )
             self.last_usage_tokens = getattr(resp.usage_metadata, "total_token_count", 0) or 0
             return resp.text
-        if self._kind == "openai":
+        if self._kind == "openai_compatible":
+            messages = ([{"role": "system", "content": system}] if system else []) + \
+                       [{"role": "user", "content": prompt}]
             resp = self._client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                max_completion_tokens=MAX_OUTPUT_TOKENS,
+                model=self._model_name,
+                messages=messages,
+                max_tokens=MAX_OUTPUT_TOKENS,  # NIM-hosted models don't all accept max_completion_tokens
             )
             self.last_usage_tokens = getattr(resp.usage, "total_tokens", 0) or 0
-            return resp.choices[0].message.content
+            return resp.choices[0].message.content or ""
         if self._kind == "anthropic":
             resp = self._client.messages.create(
                 model="claude-3-5-haiku-latest",

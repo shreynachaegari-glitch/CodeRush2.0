@@ -67,7 +67,9 @@ Located in `code rush/shutdown/`:
 | `demo_assets/generate_assets.py` | Generates the real demo PDF (with planted prompt-injection) and CSV dataset |
 | `evaluate.py` | Standalone held-out benchmark runner (`python -m shutdown.evaluate`) — no LLM call, no cost, reproducible |
 | `writeup.py` | Regenerates `docs/evaluation_report.md` (narrative prose) from the latest finalized run — `python -m shutdown.writeup` |
-| `tests/` | 24-case `unittest` suite: injection detection, unit normalization (incl. the text-corruption regression), strategy scoring/policy-guard, confidence-update boundaries, query distillation, and the meta→control-plane seam — `python -m unittest discover -s shutdown/tests -t .` |
+| `web.py` | Starlette server for the web UI — PDF upload, SSE event stream, static hosting. `python -m shutdown.web` → http://127.0.0.1:8000 |
+| `static/` | React UI (`app.js` via htm, no build step), `icons.js` (hand-authored Iconsax-style SVG set), `styles.css` (design tokens), `vendor/` (React+ReactDOM+htm vendored locally so the demo needs no network) |
+| `tests/` | 31-case `unittest` suite: injection detection, unit normalization (incl. the text-corruption regression), strategy scoring/policy-guard, confidence-update boundaries, query distillation, and the meta→control-plane seam — `python -m unittest discover -s shutdown/tests -t .` |
 
 **Confirmed working end-to-end with a real Gemini key** (`gemini-flash-latest`, via the current `google-genai` SDK — the old `google.generativeai` package and `gemini-1.5-flash` model are both dead, don't reintroduce them):
 - 3 distinct, falsifiable, domain-appropriate hypotheses generated per run
@@ -154,6 +156,35 @@ could mutate it.
 - **#9 (stale requirements.txt)** — cleaned up to `ddgs`, `python-dotenv`, `google-genai` as real (not commented-out) deps.
 - **#5 (partial)** — `docs/architecture.md` (mermaid diagram + data model), `docs/threat_model.md` (trust boundaries / threats / mitigations table), and `docs/evaluation_report.md` (narrative writeup, regenerate via `python -m shutdown.writeup`) added. Demo recording itself is still outstanding.
 - **#1 (browser-use)** — installed (`browser-use` 0.13.x; note this package uses `browser-harness`/CDP against a real/managed Chromium under the hood, not Playwright directly, so no separate `playwright install` step was needed) and wired into `contradiction.py:_fetch_via_browser_use()`. Real headless-browser fetch (handles JS-rendered pages via `dom_state.llm_representation()`), 25s timeout, falls back to `requests.get()` automatically if the package is missing or the browser fails. Confirmed working end-to-end in a full pipeline run.
+
+## Third pass (2026-08-07) — web UI, NVIDIA backend, evidence quality
+
+13. **Built the web UI** (`shutdown/web.py` + `shutdown/static/`). This was the
+    weakest rubric area (UX, 10%) — the only interface was a static HTML trace file.
+    Now: upload a PDF, ask a question, and every pipeline stage streams live over SSE
+    into a React UI. Deliberate choices: React/htm **vendored locally** (a demo must
+    not depend on venue wifi), no build step (the file you read is the file that
+    runs), no CSS framework, hand-authored Iconsax-style SVG icons. The investigation
+    runs on a worker thread publishing into a queue, so `run_investigation()` stays
+    synchronous and async-free — it just calls `emit(...)`.
+14. **Evidence provenance is now real.** `FetchResult` carries a `locator`, and the PDF
+    reader inserts per-page markers so any character offset resolves to a page. A
+    refused injection now reports **"page 1, section 4.3 - Power Notes"** with the
+    offending passage highlighted in the UI, instead of just naming the file. This is
+    the single most demo-legible thing in the project.
+15. **NVIDIA NIM backend added** (`NVIDIA_API_KEY`). Not for model quality — because the
+    Gemini free tier caps at **20 requests/day** and rehearsing the demo exhausted it
+    during this session. NIM is OpenAI-wire-compatible, so it reuses that client with a
+    different `base_url`; the OpenAI and NVIDIA paths were merged into one
+    `openai_compatible` branch rather than duplicated.
+16. **Stale in-memory hypothesis status.** `hyp.status` was never refreshed after a
+    confidence update, but `build_plan()` and `stop_condition_met()` both filter on it —
+    so an eliminated hypothesis kept getting planned for in later rounds. Fixed.
+17. **Non-evidentiary sources filtered by kind.** A live run cited a *YouTube video* and
+    a *job listing* as supporting evidence. Relevance scoring can't fix that — those
+    aren't weak citations, they aren't citations. Added a host denylist (video/social/
+    job boards/storefronts) checked against the host only, so an arXiv paper about
+    recommender systems isn't caught by a substring match.
 
 ## Known gaps — real next steps, ranked
 

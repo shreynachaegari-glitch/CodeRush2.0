@@ -20,10 +20,33 @@ Quick start:
 ```
 pip install -r requirements.txt
 # .env with GEMINI_API_KEY=... for a live run, or omit it to use MockLLM
-python -m shutdown.main          # full end-to-end demo run
+
+python -m shutdown.web           # ← web UI at http://127.0.0.1:8000 (upload a PDF, watch it live)
+python -m shutdown.main          # same pipeline, CLI
 python -m shutdown.evaluate      # held-out benchmark only, no LLM cost
-python -m unittest discover -s shutdown/tests -t .   # unit tests
+python -m unittest discover -s shutdown/tests -t .   # 31 unit tests
 ```
+
+**The web UI is the demo surface.** Drop in a PDF, ask a question, and watch the
+agent frame competing hypotheses, hunt for contradicting evidence, refuse a
+planted prompt injection *at the page and section it was found*, recompute a
+claim in a sandbox, propose a strategy change, and roll it back when it
+regresses — each stage streaming live. React is vendored locally, so it runs
+with no network access.
+
+### LLM backends
+
+Set exactly one key in `.env`. Gemini is the tested default; NVIDIA NIM is
+there because the Gemini free tier caps at 20 requests/day, which a few demo
+rehearsals will exhaust:
+
+| Key | Backend |
+|---|---|
+| `GEMINI_API_KEY` | Gemini (`gemini-flash-latest`) — default |
+| `NVIDIA_API_KEY` | NVIDIA NIM, OpenAI-compatible (`NVIDIA_MODEL` to override) |
+| `OPENAI_API_KEY` | OpenAI (`OPENAI_MODEL` to override) |
+| `ANTHROPIC_API_KEY` | Anthropic |
+| *(none)* | `MockLLM` — full pipeline, offline, zero cost |
 
 ### Shutdown — Adaptive Falsification Engine
 

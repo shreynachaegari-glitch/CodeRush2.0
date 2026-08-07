@@ -83,7 +83,27 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # the contradiction hunter to guess about. Same marker list the contradiction
 # hunter uses on full fetched pages (see contradiction.is_low_quality_content),
 # applied here to the shorter search snippet.
+# Hosts whose pages are never evidence for a technical claim, whatever the
+# snippet says: video/social platforms, job boards, storefronts, Q&A karma
+# sites. This filters by *kind of source*, not by opinion of the content --
+# a YouTube result is not a weak citation, it is not a citation.
+_NON_EVIDENTIARY_HOSTS = (
+    "youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "dailymotion.com",
+    "facebook.com", "instagram.com", "twitter.com", "x.com", "reddit.com",
+    "pinterest.com", "linkedin.com", "quora.com",
+    "indeed.com", "glassdoor.com", "monster.com", "naukri.com", "career", "jobs.",
+    "amazon.", "ebay.", "alibaba.com", "aliexpress.com", "etsy.com",
+)
+
+
+def is_non_evidentiary(url: str) -> bool:
+    host = re.sub(r"^https?://", "", url or "").split("/")[0].lower()
+    return any(bad in host for bad in _NON_EVIDENTIARY_HOSTS)
+
+
 def _is_low_quality(r: SearchResult) -> bool:
+    if is_non_evidentiary(r.url):
+        return True
     snippet = (r.snippet or "").strip()
     if len(snippet) < 25:
         return True
