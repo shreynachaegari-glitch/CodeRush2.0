@@ -76,48 +76,63 @@ information the user wants, and a spinner throws it away.
 at max-width rather than stretching lines past comfortable measure. ≤1180px:
 right panel drops, rail collapses to 64px icons. ≤780px: rail hides entirely.
 
-## 4. Color
+## 4. Color — revision 2
 
-Surfaces are blue-biased near-black — cool and instrument-like, never warm/paper.
-Neutrals were picked, not inherited.
+**Signature element:** every hypothesis states what would prove it wrong. That
+mechanic — not "an AI is reasoning" generically — is what a viewer should
+remember, so the falsification target is stamped onto its card like a
+case-file annotation: rotated -1.1°, `--serif` at 600 weight, oxide-red ink,
+a faded double-rule border. It's the loudest thing on the card, louder than
+the confidence ring next to it. See `.stamp` in `styles.css`.
+
+Revision 1 of this system was near-black + a single amber accent — exactly
+the AI-generated default the design brief warns against. Revised: surfaces
+carry a faint green bias (instrument, not void), text is report-stock
+parchment rather than pure white, and there are three accents each bound to
+one plane/state rather than one arbitrary neon pop.
 
 | Token | Value | Use |
 |---|---|---|
-| `--s-0` | `#07090d` | app ground |
-| `--s-1` | `#0b0e14` | rail, panel |
-| `--s-2` | `#10141c` | raised card |
-| `--s-3` | `#161b25` | hover, input |
-| `--line` / `--line-2` | `#1c2330` / `#253040` | hairlines |
-| `--fg` / `--fg-2` / `--fg-3` | `#e9eef5` / `#9aa9bc` / `#5f6d7e` | text ramp |
-
-**Exactly one accent per plane**, so a glance tells you which system you are looking at:
+| `--s-0` | `#0a0f0d` | app ground |
+| `--s-1` | `#0d1310` | rail, panel |
+| `--s-2` | `#131a16` | raised card |
+| `--s-3` | `#19211c` | hover, input |
+| `--line` / `--line-2` | `#212a24` / `#2c382f` | hairlines |
+| `--fg` / `--fg-2` / `--fg-3` | `#e8e4d8` / `#a3ab9f` / `#647065` | text ramp (parchment, not white) |
 
 | Token | Value | Meaning |
 |---|---|---|
-| `--control` | `#e0a942` amber | control plane — the hunt, live/active |
-| `--meta` | `#4cc4dd` cyan | meta plane — governance |
-| `--ok` | `#5ec98a` | supports · survived · promoted |
-| `--bad` | `#ef6a80` | refutes · eliminated · blocked |
-| `--violet` | `#a78bfa` | rollback · original proposals |
+| `--control` | `#c98a3f` amber | control plane — the hunt, live/active |
+| `--meta` | `#4a8a82` teal | meta plane — governance |
+| `--kill` | `#b0402f` oxide red | the falsification stamp |
+| `--ok` | `#6fae6f` | supports · survived · promoted |
+| `--bad` | `#b0402f` | refutes · eliminated · blocked (same ink as the stamp — one failure vocabulary) |
+| `--violet` | `#8c7aa8` | rollback · original proposals |
 
 Semantic colors are separate from the accents and never used decoratively. No
 neon, no gradients as identity — the one gradient is a 4% white sheen on glass.
 
 ## 5. Typography
 
-**Inter**, vendored locally as a variable woff2 (48KB) — no CDN, so type never
-falls back mid-demo. Monospace (`ui-monospace`) for every number, id, path and
-diff: data should look like data.
+Three roles, not two. **Inter** (vendored, 48KB variable woff2) carries UI
+chrome, labels and body text — it's a neutral instrument face, deliberately
+not asked to carry any personality. **Source Serif** (vendored, 21KB, weight
+600) appears in exactly two places: the falsification stamp and the verdict
+headline — the two moments the agent is asserting something rather than
+logging a step. That contrast (clinical sans everywhere, one authoritative
+serif at the moments that matter) is the typographic half of the signature.
+Monospace (`ui-monospace`) for every number, id, path and diff.
 
-| Role | Size / weight | Notes |
-|---|---|---|
-| Page title | 19px / 650 | `-0.025em` tracking |
-| Verdict answer | 17px / 450 | the one place prose gets room |
-| Body | 14px / 400–450 | |
-| Card text | 13–14px / 450 | |
-| Meta, captions | 11.5–12.5px / 400 | `--fg-2` / `--fg-3` |
-| Section label | 11px / 650 | uppercase, `.12em` |
-| Numeric | mono, `tabular-nums` | columns must align |
+| Role | Face | Size / weight | Notes |
+|---|---|---|---|
+| Page title | Inter | 19px / 650 | `-0.025em` tracking |
+| **Stamp mark** | **Source Serif** | 12.5px / 600 | uppercase, `.08em`, oxide red |
+| **Stamp body / verdict answer** | **Source Serif** | 14.5–19px / 400–600 | the only prose set in serif |
+| Body | Inter | 14px / 400–450 | |
+| Card text | Inter | 13–14px / 450 | |
+| Meta, captions | Inter | 11.5–12.5px / 400 | `--fg-2` / `--fg-3` |
+| Section label | Inter | 11px / 650 | uppercase, `.12em` |
+| Numeric | mono | `tabular-nums` | columns must align |
 
 Body tracking is `-0.006em` — Inter reads slightly loose at small sizes on dark.
 

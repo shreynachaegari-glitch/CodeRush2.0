@@ -1,7 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════════════
    SHUTDOWN — Research OS design system
-   Calm, scientific, high-contrast-where-it-matters. Motion communicates
-   reasoning: nothing animates unless the animation is telling you something.
+
+   Signature: every hypothesis states what would prove it wrong. That's the
+   one thing this tool does that a generic AI dashboard doesn't -- so the
+   falsification target is stamped onto its card like a case-file
+   annotation (serif, rotated, oxide-red ink), louder than the confidence
+   ring next to it. Everything else stays quiet on purpose.
+
+   Palette is instrument-dark, not void-dark: graphite carries a faint green
+   bias (oscilloscope, not a SaaS dashboard), text is report-stock parchment
+   rather than pure white. Three accents, each bound to exactly one plane/
+   state -- not one arbitrary neon pop.
    ═══════════════════════════════════════════════════════════════════════ */
 
 @font-face {
@@ -10,29 +19,35 @@
   font-weight: 100 900;
   font-display: swap;
 }
+@font-face {
+  font-family: "Source Serif";
+  src: url("/static/vendor/sourceserif.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
 
 :root {
-  /* ── surface: near-black through charcoal, blue-biased so it reads cool
-       and instrument-like rather than warm/paper ── */
-  --s-0: #07090d;   /* app ground */
-  --s-1: #0b0e14;   /* rail / panel ground */
-  --s-2: #10141c;   /* raised card */
-  --s-3: #161b25;   /* hover / input */
-  --line: #1c2330;
-  --line-2: #253040;
+  /* ── surface: instrument graphite, a faint green bias -- not a pure void ── */
+  --s-0: #0a0f0d;   /* app ground */
+  --s-1: #0d1310;   /* rail / panel ground */
+  --s-2: #131a16;   /* raised card */
+  --s-3: #19211c;   /* hover / input */
+  --line: #212a24;
+  --line-2: #2c382f;
 
-  /* ── content ── */
-  --fg: #e9eef5;
-  --fg-2: #9aa9bc;
-  --fg-3: #5f6d7e;
+  /* ── content: report-stock parchment, not pure white ── */
+  --fg: #e8e4d8;
+  --fg-2: #a3ab9f;
+  --fg-3: #647065;
 
-  /* ── semantic. Exactly one accent per plane. ── */
-  --control: #e0a942;   /* control plane — the hunt */
-  --meta: #4cc4dd;      /* meta plane — governance */
-  --ok: #5ec98a;
-  --warn: #e0a942;
-  --bad: #ef6a80;
-  --violet: #a78bfa;
+  /* ── semantic. Exactly one accent per plane/state. ── */
+  --control: #c98a3f;   /* control plane — the hunt (desaturated amber, not neon) */
+  --meta: #4a8a82;      /* meta plane — governance (teal, deliberately un-amber) */
+  --kill: #b0402f;      /* the falsification stamp — oxide/brick, not fire-engine */
+  --ok: #6fae6f;
+  --warn: #c98a3f;
+  --bad: #b0402f;
+  --violet: #8c7aa8;
 
   --r-1: 8px; --r-2: 12px; --r-3: 16px; --r-4: 22px;
 
@@ -41,6 +56,7 @@
   --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
 
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --serif: "Source Serif", Georgia, "Times New Roman", serif;
   --spring: cubic-bezier(.34, 1.4, .5, 1);
   --ease: cubic-bezier(.2, .8, .2, 1);
 
@@ -210,6 +226,43 @@ a { color: var(--meta); }
 .hcard-meta { display: flex; align-items: center; gap: 10px; margin-top: 9px; flex-wrap: wrap; font-size: 11.5px; color: var(--fg-3); }
 .hcard-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-3); }
 .kills { font-size: 12px; color: var(--fg-3); margin-top: 9px; padding-left: 10px; border-left: 2px solid var(--line-2); }
+
+/* ═══ the stamp — signature element ══════════════════════════════════════
+   What would prove this claim wrong, presented like a case-file annotation:
+   a physical stamp pressed onto the report, not a UI label. This is the one
+   thing on the page that should look hand-applied rather than rendered. */
+.stamp {
+  position: relative; margin: 12px 2px 2px; padding: 10px 14px 10px 16px;
+  border: 1.5px solid color-mix(in srgb, var(--kill) 55%, transparent);
+  border-radius: 3px; transform: rotate(-1.1deg);
+  background: color-mix(in srgb, var(--kill) 7%, transparent);
+  animation: stamp-hit .32s cubic-bezier(.2, 1.3, .4, 1) both;
+  animation-delay: .15s;
+  opacity: 0; /* animation fills forward -- avoids a flash of unstamped state */
+}
+.stamp::before {
+  /* the worn double-ruled border a real ink stamp leaves */
+  content: ""; position: absolute; inset: 3px; border: 1px solid color-mix(in srgb, var(--kill) 30%, transparent);
+  border-radius: 2px; pointer-events: none;
+}
+.stamp-mark {
+  display: block; font-family: var(--serif); font-weight: 600; font-size: 12.5px;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--kill);
+  margin-bottom: 3px;
+}
+.stamp-body {
+  display: block; font-family: var(--serif); font-size: 14.5px; line-height: 1.5;
+  color: color-mix(in srgb, var(--kill) 25%, var(--fg));
+  font-weight: 400;
+}
+@keyframes stamp-hit {
+  0%   { opacity: 0; transform: rotate(-1.1deg) scale(1.5); }
+  60%  { opacity: 1; transform: rotate(-1.1deg) scale(0.96); }
+  100% { opacity: 1; transform: rotate(-1.1deg) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stamp { animation: none; opacity: 1; }
+}
 .kills b { color: var(--fg-2); font-weight: 550; }
 
 /* progress ring */
@@ -271,7 +324,10 @@ a { color: var(--meta); }
   animation: lift-in .55s var(--ease) both;
 }
 .verdict-l { font-size: 10px; text-transform: uppercase; letter-spacing: .13em; color: var(--fg-3); font-weight: 650; }
-.verdict-a { font-size: 17px; line-height: 1.5; font-weight: 450; margin: var(--sp-3) 0 var(--sp-4); letter-spacing: -.015em; }
+.verdict-a {
+  font-family: var(--serif); font-size: 19px; line-height: 1.55; font-weight: 600;
+  margin: var(--sp-3) 0 var(--sp-4); letter-spacing: -.005em; color: var(--fg);
+}
 .verdict-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
 .verdict-row .w { color: var(--fg-2); font-size: 12.5px; }
 .verdict-foot { display: grid; gap: 10px; margin-top: var(--sp-4); padding-top: var(--sp-4); border-top: 1px solid var(--line); font-size: 12.5px; color: var(--fg-2); }

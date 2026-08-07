@@ -6,13 +6,13 @@
    investigation unfolding — motion here carries meaning, not decoration. */
 (function () {
   const REL = {
-    supports:    { color: "#5ec98a", label: "supports" },
-    weakens:     { color: "#e0a942", label: "weakens" },
-    refutes:     { color: "#ef6a80", label: "refutes" },
+    supports:    { color: "#6fae6f", label: "supports" },
+    weakens:     { color: "#c98a3f", label: "weakens" },
+    refutes:     { color: "#b0402f", label: "refutes" },
     unknown:     { color: "#5c6a7d", label: "unknown" },
-    verified_by: { color: "#4cc4dd", label: "verified by" },
+    verified_by: { color: "#4a8a82", label: "verified by" },
   };
-  const STATUS = { survived: "#5ec98a", eliminated: "#ef6a80", alive: "#e0a942" };
+  const STATUS = { survived: "#6fae6f", eliminated: "#b0402f", alive: "#c98a3f" };
 
   class EvidenceGraph {
     constructor(canvas) {
@@ -183,19 +183,19 @@
           g.beginPath(); g.arc(0, 0, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (n.confidence || 0));
           g.strokeStyle = col; g.lineWidth = 3; g.lineCap = "round"; g.stroke();
           g.beginPath(); g.arc(0, 0, r, 0, 7); g.strokeStyle = col + "33"; g.lineWidth = 3; g.stroke();
-          g.fillStyle = "#0b0e13"; g.beginPath(); g.arc(0, 0, r - 4, 0, 7); g.fill();
+          g.fillStyle = "#0d1310"; g.beginPath(); g.arc(0, 0, r - 4, 0, 7); g.fill();
           g.fillStyle = col; g.font = "600 10px ui-monospace, monospace";
           g.textAlign = "center"; g.textBaseline = "middle";
           g.fillText(Math.round((n.confidence || 0) * 100), 0, 0);
         } else if (n.kind === "verification") {
           g.rotate(Math.PI / 4);
-          g.fillStyle = "#4cc4dd22"; g.strokeStyle = "#4cc4dd"; g.lineWidth = 1.4;
+          g.fillStyle = "#4a8a8222"; g.strokeStyle = "#4a8a82"; g.lineWidth = 1.4;
           g.fillRect(-r, -r, r * 2, r * 2); g.strokeRect(-r, -r, r * 2, r * 2);
         } else {
           g.beginPath(); g.arc(0, 0, r, 0, 7);
-          g.fillStyle = "#161d28"; g.fill();
-          g.strokeStyle = "#33465c"; g.lineWidth = 1.3; g.stroke();
-          g.beginPath(); g.arc(0, 0, 3, 0, 7); g.fillStyle = "#7d8fa6"; g.fill();
+          g.fillStyle = "#131a16"; g.fill();
+          g.strokeStyle = "#2c382f"; g.lineWidth = 1.3; g.stroke();
+          g.beginPath(); g.arc(0, 0, 3, 0, 7); g.fillStyle = "#a3ab9f"; g.fill();
         }
         g.restore();
       }

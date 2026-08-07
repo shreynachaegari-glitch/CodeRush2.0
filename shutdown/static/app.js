@@ -43,7 +43,7 @@
     { id: "reports",    label: "Reports",         icon: "reports" },
   ];
   const SRC_ICON = { pdf: "doc", paper: "paper", dataset: "database", web: "globe", code_output: "terminal", inline: "doc" };
-  const OK = "#5ec98a", WARN = "#e0a942", BAD = "#ef6a80", META = "#4cc4dd";
+  const OK = "#6fae6f", WARN = "#c98a3f", BAD = "#b0402f", META = "#4a8a82", KILL = "#b0402f";
 
   const hue = (s) => (s === "survived" || s === "supported" ? OK
                     : s === "eliminated" || s === "falsified" ? BAD : WARN);
@@ -87,7 +87,7 @@
     return html`
       <div class="ring" style=${{ width: size, height: size }}>
         <svg width=${size} height=${size}>
-          <circle cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke="#1c2330" stroke-width="3" />
+          <circle cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke="#212a24" stroke-width="3" />
           <circle cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke=${col} stroke-width="3"
                   stroke-linecap="round" stroke-dasharray=${C} stroke-dashoffset=${C * (1 - v)} />
         </svg>
@@ -140,7 +140,11 @@
               ${refutes > 0 && html`<span class="dot"></span><span style=${{ color: BAD }}>${refutes} contradiction${refutes > 1 ? "s" : ""}</span>`}
               ${h.ruling && html`<${Tag} k=${h.ruling}>${h.ruling}<//>`}
             </div>
-            ${open && h.kills_it && html`<div class="kills"><b>Falsified by:</b> ${h.kills_it}</div>`}
+            ${open && h.kills_it && html`
+              <div class="stamp">
+                <span class="stamp-mark">✕ falsified by</span>
+                <span class="stamp-body">${h.kills_it}</span>
+              </div>`}
             ${h.why && html`<div class="kills" style=${{ borderLeftColor: hue(h.ruling) }}>${h.why}</div>`}
           </div>
           <${Icon} name="chevron" size=15 style=${{ color: "var(--fg-3)", transform: open ? "rotate(90deg)" : "", transition: "transform .25s" }} />
@@ -275,8 +279,8 @@
             ${rollback && html`
               <div>
                 <div class="sp-t">Rollback history</div>
-                <div class="commit-c" style=${{ borderLeft: `2px solid ${"#a78bfa"}` }}>
-                  <div class="commit-h"><${Icon} name="rewind" size=14 style=${{ color: "#a78bfa" }} /> Regression caught after promotion</div>
+                <div class="commit-c" style=${{ borderLeft: `2px solid ${"#8c7aa8"}` }}>
+                  <div class="commit-h"><${Icon} name="rewind" size=14 style=${{ color: "#8c7aa8" }} /> Regression caught after promotion</div>
                   <div class="bench">
                     <span class="to dn">${rollback.bad_version_accuracy.toFixed(3)}</span>
                     <span class="from">→</span>
@@ -496,7 +500,14 @@
       on("teacher", (d) => { setTeacher(d); log(`teacher: ${d.authored_by === "teacher" ? "model-authored" : "derived"} critique`, true); });
       on("ticket", (d) => setTickets((T) => [...T, d]));
       on("rollback", (d) => { setRollback(d); log(`rolled back to ${String(d.rolled_back_to).slice(0, 7)}`, true); });
-      on("verdict", (d) => { setVerdict(d); setHyps(d.hypotheses || []); log("verdict synthesized", true); });
+      on("verdict", (d) => {
+        setVerdict(d);
+        // merge, don't replace -- the verdict payload carries the ruling but
+        // not kills_it (the falsification target from framing); replacing
+        // wholesale silently dropped the stamp on every completed run
+        setHyps((H) => (d.hypotheses || []).map((v) => ({ ...(H.find((h) => h.id === v.id) || {}), ...v })));
+        log("verdict synthesized", true);
+      });
       on("synthesis", (d) => { setSynthesis(d); if (d.proposals?.length) log(`${d.proposals.length} original proposals`, true); });
       on("approval", (d) => log(`gate ${d.action} · ${d.approved ? "approved" : "rejected"}`));
       on("finished", (d) => { setReport(d.report); log("finalized", true); });
@@ -599,7 +610,7 @@
 
           ${synthesis && html`
             <section class="sec">
-              <div class="sec-hd"><${Icon} name="idea" size=15 style=${{ color: "#a78bfa" }} />
+              <div class="sec-hd"><${Icon} name="idea" size=15 style=${{ color: "#8c7aa8" }} />
                 <h2>Original proposals</h2><span class="n">evidence-constrained</span></div>
               ${synthesis.proposals?.length
                 ? synthesis.proposals.map((p, i) => html`
