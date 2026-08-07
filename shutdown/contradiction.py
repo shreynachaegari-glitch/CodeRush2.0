@@ -62,7 +62,9 @@ class FetchResult:
 _LOW_QUALITY_CONTENT_MARKERS = (
     "enable javascript", "enable cookies", "verify you are human", "access denied",
     "access restricted", "unusual activity", "just a moment", "checking your browser",
-    "attention required", "captcha", "temporarily unavailable",
+    "attention required", "captcha", "temporarily unavailable", "site unavailable",
+    "discontinued servicing", "not available in your region", "not available in your country",
+    "content is not available",
 )
 
 
