@@ -52,6 +52,7 @@ class RunChannel:
     history: list = field(default_factory=list)
     done: bool = False
     error: str | None = None
+    store_run_id: str | None = None  # the real run_id, once the run has one
 
 
 _channels: dict[str, RunChannel] = {}
@@ -82,10 +83,13 @@ def _investigate(client_run_id: str, question: str, pdf_path: Path | None) -> No
         _publish(client_run_id, "backend", {"llm": type(llm).__name__,
                                             "model": getattr(llm, "_model_name", "mock")})
 
+        def sink(event: str, payload: dict) -> None:
+            if event == "run_started":
+                ch.store_run_id = payload.get("run_id")
+            _publish(client_run_id, event, payload)
+
         real_run_id = run_investigation(
-            store, llm, question, profile,
-            emit=lambda e, p: _publish(client_run_id, e, p),
-            spec_pdf=pdf_path,
+            store, llm, question, profile, emit=sink, spec_pdf=pdf_path,
         )
 
         report = report_for_run(store, real_run_id)
@@ -176,11 +180,71 @@ async def health(request: Request) -> JSONResponse:
     })
 
 
+async def list_runs(request: Request) -> JSONResponse:
+    store = Store(DB_PATH)
+    rows = store.read("SELECT * FROM runs ORDER BY started_at DESC LIMIT 40")
+    out = []
+    for r in rows:
+        n = store.read_one("SELECT COUNT(*) c FROM hypotheses WHERE run_id = ?", (r["run_id"],))
+        v = store.read_one(
+            "SELECT content FROM memory WHERE memory_type = 'verdict' AND run_id = ? LIMIT 1", (r["run_id"],))
+        out.append({
+            "run_id": r["run_id"], "question": r["question"], "status": r["status"],
+            "started_at": r["started_at"], "tokens": r["total_cost_tokens"],
+            "hypotheses": n["c"] if n else 0,
+            "verdict": json.loads(v["content"]) if v and v["content"] else None,
+        })
+    return JSONResponse(out)
+
+
+async def run_graph(request: Request) -> JSONResponse:
+    """Evidence graph as nodes+edges, which is what the visualisation needs --
+    the stored shape is hypothesis-centric and would force the client to
+    re-derive the topology on every frame."""
+    from .evidence import graph_for_run
+
+    store = Store(DB_PATH)
+    rid = request.path_params["run_id"]
+    g = graph_for_run(store, rid)
+
+    nodes, edges, seen = [], [], set()
+    for h in g["hypotheses"]:
+        nodes.append({"id": h["hypothesis_id"], "kind": "hypothesis", "label": h["statement"],
+                      "confidence": h["confidence"], "status": h["status"]})
+        for e in h["evidence"]:
+            sid = e["source_id"]
+            if sid not in seen:
+                seen.add(sid)
+                nodes.append({
+                    "id": sid,
+                    "kind": "verification" if e["source_type"] == "code_output" else "source",
+                    "label": e["url_or_path"], "source_type": e["source_type"],
+                })
+            edges.append({"from": sid, "to": h["hypothesis_id"], "relation": e["relation"],
+                          "weight": e["confidence"], "reason": e["transformation"],
+                          "at": e["timestamp"], "cls": e["contradiction_class"]})
+    return JSONResponse({"run_id": rid, "nodes": nodes, "edges": edges})
+
+
+async def strategies(request: Request) -> JSONResponse:
+    store = Store(DB_PATH)
+    versions = [dict(r) for r in store.read(
+        "SELECT * FROM strategy_versions ORDER BY created_at DESC LIMIT 40")]
+    tickets = [dict(r) for r in store.read(
+        "SELECT * FROM evolution_tickets ORDER BY rowid DESC LIMIT 40")]
+    rollbacks = [dict(r) for r in store.read(
+        "SELECT * FROM memory WHERE memory_type = 'rollback_event' ORDER BY created_at DESC LIMIT 20")]
+    return JSONResponse({"versions": versions, "tickets": tickets, "rollbacks": rollbacks})
+
+
 routes = [
     Route("/", index),
     Route("/api/health", health),
     Route("/api/run", start_run, methods=["POST"]),
     Route("/api/events/{run_id}", stream),
+    Route("/api/runs", list_runs),
+    Route("/api/graph/{run_id}", run_graph),
+    Route("/api/strategies", strategies),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),
 ]
 

@@ -11,9 +11,11 @@ from pathlib import Path
 
 from . import contradiction as contradiction_mod
 from . import evidence as evidence_mod
+from . import scholar
 from . import strategy as strategy_mod
+from . import verdict as verdict_mod
 from .approval import ApprovalGate
-from .db import Store, new_id, now
+from .db import Store, dumps, new_id, now
 from .hypothesis import frame_hypotheses
 from .llm import get_default_client
 from .metrics import render_report_table, report_for_run
@@ -180,18 +182,39 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
                 emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": source_ref, "kind": "document"})
                 fetch = contradiction_mod.fetch(source_ref)
             else:
-                emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": step.query, "kind": "search"})
-                results = hybrid_search(step.query, max_results=3)
-                top = results[0] if results else None
-                # the real locator, kept verbatim -- a citation the reader can't
-                # follow back to its origin isn't a citation
-                source_ref = top.url if top else "https://example.invalid/none"
-                fetch = contradiction_mod.fetch(source_ref)
-                if top:
-                    # web search is the noisiest evidence leg (see HANDOFF known gap #2) --
-                    # scale confidence by how relevant the reranked result actually was
-                    # instead of trusting every hit at the same flat weight.
-                    evidence_confidence = round(0.3 + 0.4 * min(1.0, max(0.0, top.score)), 3)
+                # Literature first. A peer-reviewed paper with a DOI and a
+                # citation count is evidence; a general web page usually isn't.
+                # Web search stays as the fallback when the indexes return
+                # nothing for a query.
+                emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": step.query, "kind": "literature"})
+                papers = scholar.search_literature(step.query, limit=3)
+                if papers:
+                    paper = papers[0]
+                    source_ref = paper.url or paper.doi
+                    # An abstract from an index is clean, on-topic text -- far
+                    # better contradiction-checking material than a scraped page.
+                    fetch = contradiction_mod.FetchResult(
+                        content=f"{paper.title}. {paper.abstract}".strip(),
+                        source_type="paper", injection_flagged=False, injection_detail="",
+                    )
+                    # standing scales weight, capped so a famous paper can't
+                    # dominate on reputation alone
+                    evidence_confidence = round(min(0.9, 0.55 + 0.1 * min(3, paper.citations / 50)), 3)
+                    emit("papers", {"hypothesis_id": hyp.hypothesis_id,
+                                    "papers": [p.as_dict() for p in papers]})
+                else:
+                    emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": step.query, "kind": "search"})
+                    results = hybrid_search(step.query, max_results=3)
+                    top = results[0] if results else None
+                    # the real locator, kept verbatim -- a citation the reader can't
+                    # follow back to its origin isn't a citation
+                    source_ref = top.url if top else "https://example.invalid/none"
+                    fetch = contradiction_mod.fetch(source_ref)
+                    if top:
+                        # web search is the noisiest evidence leg -- scale confidence by
+                        # how relevant the reranked result actually was instead of
+                        # trusting every hit at the same flat weight.
+                        evidence_confidence = round(0.3 + 0.4 * min(1.0, max(0.0, top.score)), 3)
 
             # an anti-bot wall or an empty body is a failed fetch even though the
             # request completed -- recorded on the source so browser_success measures
@@ -270,24 +293,32 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
                           "timed_out": verify.timed_out})
     emit("stage", {"stage": "verifying", "status": "done"})
 
-    # -- meta plane: one failure this run surfaced becomes an evolution ticket
+    # -- meta plane: the Teacher reviews what THIS run actually did and writes
+    # the ticket. Previously this block was a hardcoded string, which meant the
+    # "self-improvement" loop proposed the same fix regardless of what happened.
     emit("stage", {"stage": "evolving", "status": "active"})
     gate = ApprovalGate(store)
     held_out = strategy_mod.load_held_out_set(HELD_OUT_PATH)
+
+    lesson = verdict_mod.critique_run(store, llm, run_id, question)
+    _track_cost(store, run_id, llm)
+    emit("teacher", lesson)
+
     ticket_id = strategy_mod.raise_ticket(
         store, run_id=run_id,
-        failure_description="Weak-evidence sources were treated the same as strong ones (no distinction in confidence delta).",
-        root_cause="Confidence-update rule doesn't scale the 'weakens' penalty by source quality.",
-        hypothesis="Increasing the 'weakens' penalty slightly will separate genuinely weak claims from alive ones faster.",
-        proposed_diff={"confidence_deltas": {"weakens": -0.10}},
-        expected_gain="+ held-out accuracy on borderline 'weakens' cases",
-        risk="Might over-penalize claims that recover with later supporting evidence",
+        failure_description=lesson["failure_description"],
+        root_cause=lesson["root_cause"],
+        hypothesis=lesson["hypothesis"],
+        proposed_diff=lesson["proposed_diff"],
+        expected_gain=lesson["expected_gain"],
+        risk=lesson["risk"],
     )
     eval_result = strategy_mod.evaluate_ticket(store, ticket_id, held_out)
     emit("ticket", {
         "ticket_id": ticket_id, "kind": "improvement",
-        "failure": "Weak-evidence sources were treated the same as strong ones.",
-        "proposed_diff": {"confidence_deltas": {"weakens": -0.10}},
+        "failure": lesson["failure_description"], "root_cause": lesson["root_cause"],
+        "authored_by": lesson.get("authored_by", "teacher"),
+        "proposed_diff": lesson["proposed_diff"],
         "before": eval_result.get("before"), "after": eval_result.get("after"),
         "improved": eval_result.get("improved"),
     })
@@ -340,12 +371,47 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
     emit("rollback", rollback_demo)
     emit("stage", {"stage": "evolving", "status": "done"})
 
-    # -- publish gate
+    # -- verdict: actually answer the question. Confidence numbers are not a
+    # conclusion; this states what the evidence shows, rules each hypothesis
+    # right/wrong/undetermined, and names what would overturn it.
     emit("stage", {"stage": "verdict", "status": "active"})
+    final_verdict = verdict_mod.synthesize_verdict(store, llm, run_id, question)
+    _track_cost(store, run_id, llm)
+    ruling_by_id = {r["hypothesis_id"]: r for r in final_verdict.get("rulings", [])}
+    emit("verdict", {
+        **final_verdict,
+        "hypotheses": [
+            {"id": h.hypothesis_id, "statement": h.statement,
+             "confidence": h.confidence_current, "status": h.status,
+             "ruling": ruling_by_id.get(h.hypothesis_id, {}).get("ruling", "undetermined"),
+             "why": ruling_by_id.get(h.hypothesis_id, {}).get("why", "")}
+            for h in hyps
+        ],
+    })
+    store.insert("memory", {
+        "memory_id": new_id(), "memory_type": "verdict", "run_id": run_id,
+        "content": dumps(final_verdict), "provenance": "verdict.synthesize_verdict",
+        "created_at": now(), "expires_at": None,
+    })
+
+    # -- synthesis: judging claims isn't the same as producing an idea. This
+    # proposes what to do about the result, constrained by the same evidence
+    # and held to the same falsifiability standard as the hypotheses were.
+    synthesis = verdict_mod.propose_solutions(store, llm, run_id, question, final_verdict)
+    _track_cost(store, run_id, llm)
+    emit("synthesis", synthesis)
+    store.insert("memory", {
+        "memory_id": new_id(), "memory_type": "synthesis", "run_id": run_id,
+        "content": dumps(synthesis), "provenance": "verdict.propose_solutions",
+        "created_at": now(), "expires_at": None,
+    })
+
+    # -- publish gate
     graph_summary = {
         "hypotheses": [h.statement for h in hyps],
         "contradiction_found": contradiction_found_ever,
         "rollback_demo": rollback_demo,
+        "verdict": final_verdict,
     }
     publish_approval_id = gate.request(run_id=run_id, action_type="publish_verdict", context=graph_summary)
     emit("approval", {"approval_id": publish_approval_id, "action": "publish_verdict",
