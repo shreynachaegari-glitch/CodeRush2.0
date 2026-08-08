@@ -36,7 +36,7 @@ from starlette.staticfiles import StaticFiles
 
 from .db import Store
 from .llm import get_default_client
-from .main import PROFILE_PATH, _load_dotenv, run_investigation
+from .main import GENERAL_PROFILE, PROFILE_PATH, _load_dotenv, run_investigation
 from .metrics import report_for_run
 from .trace import build_research_package, render_trace_html
 
@@ -82,7 +82,11 @@ def _investigate(client_run_id: str, question: str, pdf_path: Path | None, use_d
         _load_dotenv()
         store = Store(DB_PATH)
         llm = get_default_client()
-        profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+        # the bundled communications profile's search keywords are only
+        # correct for the bundled satellite demo -- any other question gets
+        # no domain keywords rather than the wrong ones (see GENERAL_PROFILE)
+        profile = (json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+                  if use_demo_assets else GENERAL_PROFILE)
 
         _publish(client_run_id, "backend", {"llm": type(llm).__name__,
                                             "model": getattr(llm, "_model_name", "mock"),

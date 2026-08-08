@@ -26,6 +26,14 @@ from .trace import build_research_package, render_trace_cli, render_trace_html
 from .verification import recompute_link_budget, verify_claim
 
 PROFILE_PATH = Path(__file__).parent / "profiles" / "communications.json"
+# The communications profile's search_keywords ("satellite", "link budget",
+# "RF", ...) are appended to EVERY query build_query() constructs (see
+# planner.py) -- correct for the bundled satellite demo, actively harmful for
+# any other question. Live-observed: a RISC-V register-count question had
+# "satellite link budget RF" glued onto every search query, returning
+# wireless-propagation and particle-physics papers instead of anything about
+# RISC-V. A real question gets no domain keywords rather than the wrong ones.
+GENERAL_PROFILE = {"name": "general", "search_keywords": []}
 HELD_OUT_PATH = Path(__file__).parent / "held_out_set.json"
 HELD_OUT_RETRIEVAL_PATH = Path(__file__).parent / "held_out_retrieval.json"
 DEMO_ASSETS = Path(__file__).parent.parent / "demo_assets"
