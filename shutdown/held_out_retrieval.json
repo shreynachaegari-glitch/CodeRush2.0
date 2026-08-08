@@ -1,0 +1,50 @@
+[
+  {
+    "id": "rd-01",
+    "query": "does single-master bus arbitration keep peak power within thermal budget",
+    "candidates": [
+      {"title": "Bus arbitration and thermal budget analysis for shared buses",
+       "url": "https://specs.example.org/arbitration-thermal", "snippet": "Single-master arbitration keeps peak power draw within the thermal budget under nominal load, per bench measurement."},
+      {"title": "Arbitration schemes and thermal budget: a duplicate mirror of the above",
+       "url": "https://specs.example.org/arbitration-thermal-mirror", "snippet": "Single-master arbitration keeps peak power draw within the thermal budget under nominal load, per bench measurement."},
+      {"title": "Independent field study: arbitration scheme has no measurable effect on peak power",
+       "url": "https://journal.example.net/field-study-arbitration", "snippet": "A separate field study found arbitration scheme choice made no measurable difference to peak power under real traffic."},
+      {"title": "Vendor datasheet excerpt on arbitration modes",
+       "url": "https://vendor.example.com/datasheet-arb", "snippet": "Datasheet describes single-master and multi-master arbitration modes without power figures."}
+    ],
+    "k": 3,
+    "min_distinct_hosts": 3
+  },
+  {
+    "id": "rd-02",
+    "query": "monocrystalline solar panel degradation rate humid tropical",
+    "candidates": [
+      {"title": "Field study: panel degradation in humid tropical Kerala sites",
+       "url": "https://research.example.edu/kerala-panels", "snippet": "Five-year field measurements show 3.2 percent annual degradation in humid tropical installations."},
+      {"title": "Same field study, reposted on a course syllabus PDF mirror",
+       "url": "https://research.example.edu/kerala-panels-mirror", "snippet": "Five-year field measurements show 3.2 percent annual degradation in humid tropical installations."},
+      {"title": "Manufacturer spec sheet: standard degradation curve",
+       "url": "https://panelmaker.example.com/spec-sheet", "snippet": "Manufacturer specifies 0.5 to 0.8 percent annual degradation under standard test conditions."},
+      {"title": "Industry association white paper on degradation benchmarks",
+       "url": "https://solarassoc.example.org/whitepaper", "snippet": "Industry-wide benchmark figures for degradation across climates, citing multiple studies."}
+    ],
+    "k": 3,
+    "min_distinct_hosts": 3
+  },
+  {
+    "id": "rd-03",
+    "query": "RISC-V RV32I register count",
+    "candidates": [
+      {"title": "RISC-V unprivileged specification excerpt",
+       "url": "https://riscv.example.org/spec", "snippet": "RV32I defines 32 general-purpose registers, x0 hardwired to zero."},
+      {"title": "RISC-V spec, alternate mirror hosting the identical excerpt",
+       "url": "https://riscv.example.org/spec-mirror", "snippet": "RV32I defines 32 general-purpose registers, x0 hardwired to zero."},
+      {"title": "Compiler backend notes referencing the RV32E reduced profile",
+       "url": "https://toolchain.example.dev/rv32e-notes", "snippet": "RV32E is a reduced profile with only 16 general-purpose registers, distinct from RV32I."},
+      {"title": "Embedded systems textbook chapter on RISC-V variants",
+       "url": "https://textbook.example.net/riscv-chapter", "snippet": "Overview of RV32I, RV32E, and RV64I register file differences."}
+    ],
+    "k": 3,
+    "min_distinct_hosts": 3
+  }
+]

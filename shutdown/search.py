@@ -110,16 +110,53 @@ def _is_low_quality(r: SearchResult) -> bool:
     return is_low_quality_content(snippet)
 
 
-def hybrid_search(query: str, max_results: int = 8, min_score: float = 0.05) -> list[SearchResult]:
+def _host(url: str) -> str:
+    return re.sub(r"^https?://", "", url or "").split("/")[0].lower()
+
+
+def _mmr_rerank(candidates: list[SearchResult], diversity: float) -> list[SearchResult]:
+    """Maximal-Marginal-Relevance rerank: at each step, pick the candidate that
+    maximizes `(1-diversity)*relevance - diversity*similarity_to_already_picked`
+    instead of just sorting by relevance once. `diversity=0` reduces exactly to
+    plain relevance sort (today's behavior); `diversity=1` prioritizes pulling
+    in a source that says something DIFFERENT from what's already been picked,
+    over another top-scoring near-duplicate of the same page. This is what
+    `retrieval_diversity` in strategy.py actually controls -- previously that
+    parameter was stored and could be "promoted" by the Strategy Evaluator
+    without ever being read by any retrieval code.
+    """
+    if diversity <= 0 or len(candidates) <= 1:
+        return sorted(candidates, key=lambda r: r.score, reverse=True)
+
+    pool = list(candidates)
+    embeds = {id(r): _hash_embed(r.title + " " + r.snippet) for r in pool}
+    selected: list[SearchResult] = []
+    while pool:
+        if not selected:
+            best = max(pool, key=lambda r: r.score)
+        else:
+            def mmr(r: SearchResult) -> float:
+                sim = max(_cosine(embeds[id(r)], embeds[id(s)]) for s in selected)
+                return (1 - diversity) * r.score - diversity * sim
+            best = max(pool, key=mmr)
+        selected.append(best)
+        pool.remove(best)
+    return selected
+
+
+def hybrid_search(query: str, max_results: int = 8, min_score: float = 0.05,
+                   diversity: float = 0.0) -> list[SearchResult]:
     """Keyword search + dense rerank, then drop noisy/boilerplate results
     instead of letting them silently count as evidence. `min_score` is a
     relevance floor on the reranked cosine score -- a result scoring near
     zero shares almost no vocabulary with the query and is more likely to be
-    an irrelevant page than real disagreement."""
+    an irrelevant page than real disagreement. `diversity` (0-1, from the
+    active strategy's `retrieval_diversity`) trades some top-relevance for
+    pulling in sources that aren't near-duplicates of each other."""
     candidates = [r for r in _duckduckgo(query, max_results=max_results) if not _is_low_quality(r)]
     q_vec = _hash_embed(query)
     for r in candidates:
         r.score = _cosine(q_vec, _hash_embed(r.title + " " + r.snippet))
-    candidates.sort(key=lambda r: r.score, reverse=True)
-    filtered = [r for r in candidates if r.score >= min_score]
-    return filtered or candidates  # never return nothing just because everything scored low
+    ranked = _mmr_rerank(candidates, diversity)
+    filtered = [r for r in ranked if r.score >= min_score]
+    return filtered or ranked  # never return nothing just because everything scored low

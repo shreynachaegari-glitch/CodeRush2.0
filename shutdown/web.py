@@ -16,7 +16,10 @@ Run: python -m shutdown.web   (then open http://127.0.0.1:8000)
 from __future__ import annotations
 
 import asyncio
+import base64
+import hmac
 import json
+import os
 import queue
 import tempfile
 import threading
@@ -25,8 +28,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -216,6 +220,21 @@ async def strategies(request: Request) -> JSONResponse:
     return JSONResponse({"versions": versions, "tickets": tickets, "rollbacks": rollbacks})
 
 
+async def memory_route(request: Request) -> JSONResponse:
+    from . import memory as memory_mod
+
+    store = Store(DB_PATH)
+    memory_mod.prune_expired(store)  # a page load is a fine trigger too, not just a new run
+    memory_type = request.query_params.get("type")
+    rows = memory_mod.active_memory(store, memory_type=memory_type, limit=100)
+    for r in rows:
+        try:
+            r["content"] = json.loads(r["content"])
+        except (TypeError, ValueError):
+            pass
+    return JSONResponse(rows)
+
+
 routes = [
     Route("/", index),
     Route("/api/health", health),
@@ -223,17 +242,66 @@ routes = [
     Route("/api/events/{run_id}", stream),
     Route("/api/runs", list_runs),
     Route("/api/strategies", strategies),
+    Route("/api/memory", memory_route),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),
 ]
 
-app = Starlette(routes=routes)
+
+class BasicAuthMiddleware:
+    """Gates every request behind HTTP Basic Auth when `SITE_USERNAME` and
+    `SITE_PASSWORD` are both set -- the switch for going from "local demo" to
+    "public URL" without a stranger burning your LLM quota or hitting the
+    sandboxed code-execution/PDF-upload path unauthenticated. Auth is a no-op
+    locally unless both env vars are set, so `python -m shutdown.web` on your
+    own machine is unaffected.
+
+    Raw ASGI (not BaseHTTPMiddleware) deliberately: BaseHTTPMiddleware
+    buffers/reconstructs the response, which risks breaking the SSE stream
+    that `/api/events/{run_id}` depends on. This passes an authorized request
+    straight through untouched.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self._user = os.environ.get("SITE_USERNAME")
+        self._pw = os.environ.get("SITE_PASSWORD")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not self._user or not self._pw:
+            await self.app(scope, receive, send)
+            return
+
+        auth = Headers(scope=scope).get("authorization", "")
+        ok = False
+        if auth.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth[6:]).decode("utf-8")
+                got_user, _, got_pw = decoded.partition(":")
+                ok = hmac.compare_digest(got_user, self._user) and hmac.compare_digest(got_pw, self._pw)
+            except Exception:
+                ok = False
+
+        if ok:
+            await self.app(scope, receive, send)
+            return
+
+        response = Response("Authentication required", status_code=401,
+                            headers={"WWW-Authenticate": 'Basic realm="Shutdown"'})
+        await response(scope, receive, send)
+
+
+app = BasicAuthMiddleware(Starlette(routes=routes))
 
 
 def main() -> None:
     import uvicorn
 
-    print("Shutdown UI  ->  http://127.0.0.1:8000")
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    port = int(os.environ.get("PORT", 8000))
+    host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
+    _load_dotenv()
+    auth_on = bool(os.environ.get("SITE_USERNAME") and os.environ.get("SITE_PASSWORD"))
+    print(f"Shutdown UI  ->  http://{host}:{port}  (auth: {'on' if auth_on else 'off'})")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

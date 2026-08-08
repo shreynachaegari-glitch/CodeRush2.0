@@ -42,6 +42,52 @@
     return html`<canvas class="landing-canvas" ref=${ref} aria-hidden="true"></canvas>`;
   }
 
+  /* Evidence graph: force-directed canvas view of hypotheses <-> sources,
+     restored from an earlier version of this UI (see graph.js) and re-themed
+     to the current dark palette. Fed directly from the same `hyps`/`ev`
+     state the hypothesis cards render -- this is a second view of the exact
+     same evidence graph, not a separate data source that could drift from
+     it. */
+  function GraphView({ hyps, ev }) {
+    const ref = useRef(null);
+    const graphRef = useRef(null);
+
+    useEffect(() => {
+      let cancelled = false;
+      import("/static/graph.js").then(({ EvidenceGraph }) => {
+        if (cancelled || !ref.current) return;
+        graphRef.current = new EvidenceGraph(ref.current);
+      }).catch(() => {});
+      return () => { cancelled = true; graphRef.current && graphRef.current.stop(); graphRef.current = null; };
+    }, []);
+
+    useEffect(() => {
+      if (!graphRef.current) return;
+      const nodes = [];
+      const edges = [];
+      const seen = new Set();
+      for (const h of hyps) {
+        nodes.push({ id: h.id, kind: "hypothesis", label: h.statement, confidence: h.confidence, status: h.status });
+        for (const [i, e] of (ev[h.id] || []).entries()) {
+          const srcId = `${h.id}:src:${i}`;
+          if (!seen.has(srcId)) {
+            seen.add(srcId);
+            nodes.push({
+              id: srcId,
+              kind: e.source_type === "code_output" ? "verification" : "source",
+              label: shortSrc(e.source) || e.source,
+              source_type: e.source_type,
+            });
+          }
+          edges.push({ from: h.id, to: srcId, relation: e.relation });
+        }
+      }
+      graphRef.current.setData({ nodes, edges });
+    }, [hyps, ev]);
+
+    return html`<canvas ref=${ref} style=${{ width: "100%", height: 420, display: "block" }} />`;
+  }
+
   const STAGES = [
     { id: "framing",   label: "Framing",      icon: "branch" },
     { id: "hunting",   label: "Hunting",      icon: "hunt" },
@@ -433,6 +479,7 @@
     const [storeRunId, setStoreRunId] = useState(null);
     const [strategyId, setStrategyId] = useState(null);
     const [runs, setRuns] = useState([]);
+    const [memoryRows, setMemoryRows] = useState(null);
     const fileRef = useRef(null);
     const verdictRef = useRef(null);
 
@@ -449,6 +496,8 @@
     useEffect(() => {
       if (view === "runs" || view === "reports")
         fetch("/api/runs").then((r) => r.json()).then(setRuns).catch(() => {});
+      if (view === "memory")
+        fetch("/api/memory").then((r) => r.json()).then(setMemoryRows).catch(() => setMemoryRows([]));
     }, [view, running]);
 
     const log = useCallback((m, hi) =>
@@ -687,6 +736,15 @@
                                 key=${h.id} onToggle=${() => setOpenIds((O) => ({ ...O, [h.id]: O[h.id] === false }))} />`)}
             </section>`}
 
+          ${hyps.length > 0 && evCount > 0 && html`
+            <section class="sec">
+              <div class="sec-hd"><${Icon} name="hunt" size=15 style=${{ color: CONTROL }} />
+                <h2>Evidence graph</h2><span class="n">hypotheses ↔ sources</span></div>
+              <div style=${{ border: "1px solid var(--line)", borderRadius: 12, background: "var(--s-1)", overflow: "hidden" }}>
+                <${GraphView} hyps=${ranked} ev=${ev} />
+              </div>
+            </section>`}
+
           ${papers.length > 0 && html`
             <section class="sec">
               <div class="sec-hd"><${Icon} name="paper" size=15 style=${{ color: META }} />
@@ -813,12 +871,51 @@
           </div>
         <//>`,
 
-      memory: () => html`
+      memory: () => {
+        const MEMORY_TAG = { verdict: "supports", synthesis: "alive", rollback_event: "refutes",
+                             unresolved_question: "weakens", source_summary: "unknown" };
+        const summarize = (row) => {
+          const c = row.content || {};
+          switch (row.memory_type) {
+            case "verdict": return c.answer || "(no answer recorded)";
+            case "synthesis": return c.proposals?.[0]?.title || c.limitation || "(no proposal recorded)";
+            case "rollback_event": return `rolled back to ${String(c.rolled_back_to || "").slice(0, 7)} — ${c.reason || ""}`;
+            case "unresolved_question": return c.statement || "(no statement)";
+            case "source_summary": return Object.entries(c.source_counts || {}).map(([k, v]) => `${v} ${k}`).join(", ") || "(no sources)";
+            default: return JSON.stringify(c).slice(0, 140);
+          }
+        };
+        const daysLeft = (iso) => {
+          if (!iso) return null;
+          const ms = new Date(iso).getTime() - Date.now();
+          return Math.max(0, Math.ceil(ms / 86400000));
+        };
+        return html`
         <${React.Fragment}>
-          <div class="work-hd"><h1>Memory</h1><span class="sub">verdicts, proposals, rollback events</span></div>
-          <${Stub} icon="memory" title="Memory browser not built"
-                   body="Verdicts, synthesis proposals and rollback events are already persisted to the memory table each run — this view for browsing them across runs is not implemented yet." />
-        <//>`,
+          <div class="work-hd"><h1>Memory</h1><span class="sub">source summaries, unresolved questions, verdicts, rollback events — expiring leads pruned automatically</span></div>
+          ${memoryRows === null
+            ? html`<div class="empty"><div class="et"><span class="dots">Loading</span></div></div>`
+            : memoryRows.length === 0
+            ? html`<${Stub} icon="memory" title="Memory is empty"
+                     body="Every run writes its verdict, synthesis, unresolved questions and a source-consultation summary here. Unresolved questions and source summaries expire automatically after 30 and 90 days." />`
+            : html`<div style=${{ border: "1px solid var(--line)", borderRadius: 12, background: "var(--s-1)", padding: "4px 16px" }}>
+                ${memoryRows.map((row) => {
+                  const left = daysLeft(row.expires_at);
+                  return html`
+                    <div class="paper" key=${row.memory_id}>
+                      <div>
+                        <div class="paper-t">${summarize(row)}</div>
+                        <div class="paper-c">
+                          <${Tag} k=${MEMORY_TAG[row.memory_type] || "unknown"}>${row.memory_type.replace(/_/g, " ")}<//>
+                          · ${String(row.created_at).slice(0, 16).replace("T", " ")}
+                          · ${left === null ? "no expiry" : left === 0 ? "expires today" : `expires in ${left}d`}
+                        </div>
+                      </div>
+                    </div>`;
+                })}
+              </div>`}
+        <//>`;
+      },
     };
 
     if (view === "landing") return WORK[view]();

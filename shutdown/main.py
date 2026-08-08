@@ -11,11 +11,12 @@ from pathlib import Path
 
 from . import contradiction as contradiction_mod
 from . import evidence as evidence_mod
+from . import memory as memory_mod
 from . import scholar
 from . import strategy as strategy_mod
 from . import verdict as verdict_mod
 from .approval import ApprovalGate
-from .db import Store, dumps, new_id, now
+from .db import Store, new_id, now
 from .hypothesis import frame_hypotheses
 from .llm import get_default_client
 from .metrics import render_report_table, report_for_run
@@ -26,6 +27,7 @@ from .verification import recompute_link_budget, verify_claim
 
 PROFILE_PATH = Path(__file__).parent / "profiles" / "communications.json"
 HELD_OUT_PATH = Path(__file__).parent / "held_out_set.json"
+HELD_OUT_RETRIEVAL_PATH = Path(__file__).parent / "held_out_retrieval.json"
 DEMO_ASSETS = Path(__file__).parent.parent / "demo_assets"
 
 # Real files, not inline strings -- exercises actual PDF parsing and actual
@@ -99,6 +101,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
         spec_pdf = SPEC_SHEET_PDF
     if dataset_csv is None and use_demo_assets and not user_document:
         dataset_csv = THERMAL_DATASET_CSV
+    memory_mod.prune_expired(store)  # actually enforce expiry, not just carry the column
     run_id = new_id()
 
     # Pin the strategy version for the whole run, and record which one it was.
@@ -109,6 +112,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
     # output would never actually reach the control plane at all.
     active = strategy_mod.active_strategy(store)
     deltas = active["strategy"]["confidence_deltas"]
+    retrieval_diversity = active["strategy"].get("retrieval_diversity", 0.0)
 
     store.insert(
         "runs",
@@ -227,7 +231,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
                                     "papers": [p.as_dict() for p in papers]})
                 else:
                     emit("fetching", {"hypothesis_id": hyp.hypothesis_id, "source": step.query, "kind": "search"})
-                    results = hybrid_search(step.query, max_results=3)
+                    results = hybrid_search(step.query, max_results=3, diversity=retrieval_diversity)
                     top = results[0] if results else None
                     # the real locator, kept verbatim -- a citation the reader can't
                     # follow back to its origin isn't a citation
@@ -373,6 +377,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
     emit("stage", {"stage": "evolving", "status": "active"})
     gate = ApprovalGate(store)
     held_out = strategy_mod.load_held_out_set(HELD_OUT_PATH)
+    retrieval_held_out = strategy_mod.load_held_out_set(HELD_OUT_RETRIEVAL_PATH)
 
     lesson = verdict_mod.critique_run(store, llm, run_id, question)
     _track_cost(store, run_id, llm)
@@ -387,7 +392,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
         expected_gain=lesson["expected_gain"],
         risk=lesson["risk"],
     )
-    eval_result = strategy_mod.evaluate_ticket(store, ticket_id, held_out)
+    eval_result = strategy_mod.evaluate_ticket(store, ticket_id, held_out, retrieval_held_out)
     emit("ticket", {
         "ticket_id": ticket_id, "kind": "improvement",
         "failure": lesson["failure_description"], "root_cause": lesson["root_cause"],
@@ -422,7 +427,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
         expected_gain="none expected -- this proposal is intentionally regressive, to exercise the rollback path",
         risk="Refuted claims never get eliminated",
     )
-    bad_eval = strategy_mod.evaluate_ticket(store, bad_ticket_id, held_out)
+    bad_eval = strategy_mod.evaluate_ticket(store, bad_ticket_id, held_out, retrieval_held_out)
     strategy_mod.finalize_ticket(store, bad_ticket_id, approved=True)  # simulate: promoted before regression caught
     strategy_mod.rollback(store, pre_rollback_active, run_id=run_id,
                           reason="held-out accuracy regressed after promotion")
@@ -462,11 +467,7 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
             for h in hyps
         ],
     })
-    store.insert("memory", {
-        "memory_id": new_id(), "memory_type": "verdict", "run_id": run_id,
-        "content": dumps(final_verdict), "provenance": "verdict.synthesize_verdict",
-        "created_at": now(), "expires_at": None,
-    })
+    memory_mod.remember(store, "verdict", run_id, final_verdict, provenance="verdict.synthesize_verdict")
 
     # -- synthesis: judging claims isn't the same as producing an idea. This
     # proposes what to do about the result, constrained by the same evidence
@@ -474,11 +475,14 @@ def run_investigation(store: Store, llm, question: str, profile: dict,
     synthesis = verdict_mod.propose_solutions(store, llm, run_id, question, final_verdict)
     _track_cost(store, run_id, llm)
     emit("synthesis", synthesis)
-    store.insert("memory", {
-        "memory_id": new_id(), "memory_type": "synthesis", "run_id": run_id,
-        "content": dumps(synthesis), "provenance": "verdict.propose_solutions",
-        "created_at": now(), "expires_at": None,
-    })
+    memory_mod.remember(store, "synthesis", run_id, synthesis, provenance="verdict.propose_solutions")
+
+    # -- long-term memory: what's left open, and what was actually consulted.
+    # Both are genuinely expiring (see memory.py) -- an unresolved question
+    # nobody follows up on, or a source-consultation summary, both go stale.
+    memory_mod.remember_unresolved_questions(store, run_id, hyps)
+    run_sources = [dict(s) for s in store.read("SELECT * FROM sources WHERE run_id = ?", (run_id,))]
+    memory_mod.remember_source_summary(store, run_id, question, run_sources)
 
     # -- publish gate
     graph_summary = {

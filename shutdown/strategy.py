@@ -46,12 +46,7 @@ def _apply_delta(confidence: float, relation: str, deltas: dict) -> float:
     return max(0.0, min(1.0, confidence + deltas.get(relation, 0.0)))
 
 
-def score_strategy(strategy: dict, held_out_set: list[dict]) -> dict:
-    """Deterministic pass over labeled cases. Each case: a starting confidence,
-    a sequence of evidence relations applied in order, and an expected final
-    status. No LLM involved in grading -- pure arithmetic + string compare.
-    """
-    deltas = strategy.get("confidence_deltas", DEFAULT_STRATEGY["confidence_deltas"])
+def _score_confidence_cases(deltas: dict, held_out_set: list[dict]) -> dict:
     correct = 0
     for case in held_out_set:
         conf = case["start_confidence"]
@@ -61,10 +56,57 @@ def score_strategy(strategy: dict, held_out_set: list[dict]) -> dict:
         if predicted == case["expected_status"]:
             correct += 1
     n = max(1, len(held_out_set))
+    return {"accuracy": correct / n, "n_cases": len(held_out_set), "n_correct": correct}
+
+
+def _score_retrieval_cases(diversity: float, retrieval_cases: list[dict]) -> dict:
+    """Same idea as the confidence-case benchmark, but for `retrieval_diversity`:
+    each case is a query, a candidate pool containing near-duplicate sources,
+    and how many DISTINCT hosts should survive into the top-k. Reuses the real
+    reranker (search._mmr_rerank) so this measures the actual code path a run
+    takes, not a description of it."""
+    from .search import SearchResult, _cosine, _hash_embed, _host, _mmr_rerank
+
+    correct = 0
+    for case in retrieval_cases:
+        candidates = [SearchResult(title=c["title"], url=c["url"], snippet=c["snippet"], score=0.0)
+                      for c in case["candidates"]]
+        q_vec = _hash_embed(case["query"])
+        for r in candidates:
+            r.score = _cosine(q_vec, _hash_embed(r.title + " " + r.snippet))
+        top_k = _mmr_rerank(candidates, diversity)[: case["k"]]
+        distinct_hosts = len({_host(r.url) for r in top_k})
+        if distinct_hosts >= case["min_distinct_hosts"]:
+            correct += 1
+    n = max(1, len(retrieval_cases))
+    return {"accuracy": correct / n, "n_cases": len(retrieval_cases), "n_correct": correct}
+
+
+def score_strategy(strategy: dict, held_out_set: list[dict], retrieval_cases: list[dict] | None = None) -> dict:
+    """Deterministic pass over labeled cases -- no LLM involved in grading,
+    pure arithmetic/string/set comparison. Two sub-benchmarks, each scoring
+    the one strategy parameter it actually exercises: `confidence_deltas`
+    against the evidence-sequence cases (as before), and, when
+    `retrieval_cases` is supplied, `retrieval_diversity` against the
+    near-duplicate-source cases via the real reranker. `accuracy` is their
+    average when both run, so a promotion has to earn it on both fronts
+    instead of `retrieval_diversity` proposals sliding through on a benchmark
+    that was structurally blind to them.
+    """
+    confidence_score = _score_confidence_cases(
+        strategy.get("confidence_deltas", DEFAULT_STRATEGY["confidence_deltas"]), held_out_set)
+    if not retrieval_cases:
+        return confidence_score
+
+    retrieval_score = _score_retrieval_cases(
+        strategy.get("retrieval_diversity", DEFAULT_STRATEGY["retrieval_diversity"]), retrieval_cases)
+    combined_accuracy = (confidence_score["accuracy"] + retrieval_score["accuracy"]) / 2
     return {
-        "accuracy": correct / n,
-        "n_cases": len(held_out_set),
-        "n_correct": correct,
+        "accuracy": combined_accuracy,
+        "n_cases": confidence_score["n_cases"] + retrieval_score["n_cases"],
+        "n_correct": confidence_score["n_correct"] + retrieval_score["n_correct"],
+        "confidence_accuracy": confidence_score["accuracy"],
+        "retrieval_accuracy": retrieval_score["accuracy"],
     }
 
 
@@ -118,7 +160,8 @@ def raise_ticket(store: Store, *, run_id: str, failure_description: str, root_ca
     return ticket_id
 
 
-def evaluate_ticket(store: Store, ticket_id: str, held_out_set: list[dict]) -> dict:
+def evaluate_ticket(store: Store, ticket_id: str, held_out_set: list[dict],
+                     retrieval_held_out: list[dict] | None = None) -> dict:
     ticket = store.read_one("SELECT * FROM evolution_tickets WHERE ticket_id = ?", (ticket_id,))
     if ticket["decision"] == "auto_rejected_scope_violation":
         return {"decision": "auto_rejected_scope_violation"}
@@ -129,8 +172,8 @@ def evaluate_ticket(store: Store, ticket_id: str, held_out_set: list[dict]) -> d
     )
     proposed_strategy = _merge_diff(current["strategy"], json.loads(proposed_version["diff_json"]))
 
-    before = score_strategy(current["strategy"], held_out_set)
-    after = score_strategy(proposed_strategy, held_out_set)
+    before = score_strategy(current["strategy"], held_out_set, retrieval_held_out)
+    after = score_strategy(proposed_strategy, held_out_set, retrieval_held_out)
 
     store.update(
         "evolution_tickets", "ticket_id", ticket_id,

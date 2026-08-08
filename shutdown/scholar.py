@@ -16,10 +16,12 @@ path degrades to an empty list; the caller falls back to web search.
 from __future__ import annotations
 
 import json
+import math
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import date
 
 # OpenAlex asks for a contact address in the UA for the polite pool (faster,
 # more reliable). No account or key involved.
@@ -159,14 +161,42 @@ def _dedupe(papers: list[Paper]) -> list[Paper]:
     return out
 
 
-def search_literature(query: str, limit: int = 4) -> list[Paper]:
-    """Peer-reviewed indexes first, preprints second.
+def _recency_weight(year: int | None, *, today: date | None = None) -> float:
+    """Exponential decay favoring recent work: a paper published this year
+    scores ~1.0, one 8 years old ~0.37, older asymptotically toward 0. An
+    unknown year is scored as moderately stale (neither rewarded nor zeroed
+    out) rather than penalized as if it were ancient. `today` is injectable
+    for deterministic tests -- real callers never pass it."""
+    year_now = (today or date.today()).year
+    if not year:
+        return 0.3
+    age_years = max(0, year_now - year)
+    return math.exp(-age_years / 8.0)
 
-    Ranking favours work that other work has cited -- a proxy for standing that
-    costs nothing to compute and is far better than search-engine order. arXiv
-    results have no citation count here, so they sort below indexed papers
-    rather than being dropped: a preprint is still a real source.
+
+def _rank_score(p: Paper, *, today: date | None = None) -> float:
+    """Standing (citations, log-scaled so one outlier paper can't dominate)
+    blended with recency. Citations still carry more absolute weight than
+    recency alone -- a landmark paper from 2015 should usually beat a
+    just-published preprint saying the same thing with zero citations yet --
+    but a claim about *current* conditions can now be won by a fresher, less-
+    cited source instead of recency being ignored entirely (previously `year`
+    was only a tiebreaker after citations, which is not what AE-02's
+    "time-aware ranking" requirement asks for)."""
+    citation_weight = math.log1p(p.citations)
+    return citation_weight + 2.0 * _recency_weight(p.year, today=today)
+
+
+def search_literature(query: str, limit: int = 4) -> list[Paper]:
+    """Peer-reviewed indexes first, preprints second -- but "first" now means
+    citations-plus-recency, not citations alone.
+
+    arXiv results carry no citation count, so they lean entirely on recency;
+    a very recent preprint can still outrank a stale indexed paper, which is
+    correct for a claim about current conditions, but won't usually beat a
+    well-cited recent one -- a preprint is real evidence, not a tiebreaker of
+    last resort.
     """
     papers = _dedupe(search_openalex(query, limit) + search_arxiv(query, max(1, limit // 2)))
-    papers.sort(key=lambda p: (p.citations, p.year or 0), reverse=True)
+    papers.sort(key=_rank_score, reverse=True)
     return papers[:limit]
