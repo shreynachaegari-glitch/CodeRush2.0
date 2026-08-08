@@ -12,7 +12,21 @@ import re
 from dataclasses import dataclass
 
 from .db import Store, new_id
+from .evidence import ELIMINATED_AT, SURVIVED_AT
 from .llm import LLMClient
+
+# A prior this close to either classification boundary leaves no room for
+# evidence to actually move the needle -- and if a model-assigned prior lands
+# ON or PAST a boundary, evidence.classify() marks that hypothesis
+# survived/eliminated at framing time, before a single source has been
+# checked. If every hypothesis in a run does that (a model stating its own
+# confident opinion instead of a genuinely open prior), stop_condition_met()
+# sees no "alive" hypotheses left and skips the entire hunting loop --
+# a live-observed failure mode, not a hypothetical one. Priors are clamped
+# inside this margin regardless of what the model returns.
+_PRIOR_MARGIN = 0.05
+_PRIOR_MIN = ELIMINATED_AT + _PRIOR_MARGIN
+_PRIOR_MAX = SURVIVED_AT - _PRIOR_MARGIN
 
 FRAMER_SYSTEM = (
     "You are the Hypothesis Framer inside Shutdown, a falsification-driven research agent. "
@@ -20,6 +34,11 @@ FRAMER_SYSTEM = (
     "each independently explain or answer the question -- they must be mutually distinguishable, "
     "not restatements of each other, and each must be falsifiable (state something that, if found, "
     "would kill it, not just support it). "
+    "confidence_prior reflects genuine uncertainty BEFORE any evidence has been gathered this run -- "
+    "even a claim you personally believe is true must start as an open question, not a stated "
+    f"conclusion. Keep every confidence_prior between {_PRIOR_MIN:.2f} and {_PRIOR_MAX:.2f}; the "
+    "evidence gathered during this run, not your prior knowledge, is what should move a hypothesis "
+    "toward being confirmed or eliminated. "
     "You may also be given an excerpt from a document the user uploaded. If present, ground your "
     "hypotheses in claims the document ACTUALLY makes or data it actually contains, rather than a "
     "generic guess about the domain -- the point of uploading a document is to have it examined, not "
@@ -100,7 +119,10 @@ def frame_hypotheses(store: Store, llm: LLMClient, run_id: str, question: str, p
     hyps: list[Hypothesis] = []
     for item in items[:4]:
         prior = float(item.get("confidence_prior", 0.5))
-        prior = max(0.0, min(1.0, prior))
+        # clamp into the open band regardless of what the model returned --
+        # a prior at or past a classification boundary would mark this
+        # hypothesis survived/eliminated before any evidence exists
+        prior = max(_PRIOR_MIN, min(_PRIOR_MAX, prior))
         h = Hypothesis(
             hypothesis_id=new_id(),
             run_id=run_id,
