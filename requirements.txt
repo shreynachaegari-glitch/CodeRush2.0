@@ -4,13 +4,16 @@ requests>=2.31.0
 PyMuPDF>=1.24.0
 python-dotenv>=1.0.0
 
-# Real LLM backend actually used/tested (Gemini). MockLLM is used automatically
-# if no key is set, so this is only required for a live run.
+# Real LLM backends actually used/tested. MockLLM is used automatically if no
+# key is set, so these are only required for a live run.
 google-genai>=1.0.0
+# NVIDIA NIM speaks the OpenAI wire format, so the fallback chain in llm.py
+# (Gemini -> NVIDIA/DeepSeek -> a second NVIDIA key) needs this installed,
+# not just OpenAI's own API -- uncommented since that fallback is real now.
+openai>=1.0.0
 
-# Optional alternate LLM backends (untested against this codebase, but the
-# provider-dispatch in llm.py supports them if keyed)
-# openai>=1.0.0
+# Optional alternate LLM backend (untested against this codebase, but the
+# provider-dispatch in llm.py supports it if keyed)
 # anthropic>=0.30.0
 
 # Browser control -- real headless-browser fetch for JS-rendered pages

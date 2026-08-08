@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: shutdown-research-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m shutdown.web
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Set these in the Render dashboard after the first deploy -- never
+      # committed to the repo. Leaving SITE_USERNAME/SITE_PASSWORD unset
+      # leaves the app open to anyone with the URL; the app itself treats
+      # "both unset" as auth-disabled, so this is opt-in, not a bug.
+      - key: SITE_USERNAME
+        sync: false
+      - key: SITE_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_MODEL
+        sync: false
+      - key: NVIDIA_API_KEY_2
+        sync: false
+      - key: NVIDIA_MODEL_2
+        sync: false
+    # NOTE: Render's free plan has no persistent disk -- shutdown.db and
+    # shutdown_output/ live on ephemeral storage and reset on every deploy
+    # or instance restart. Fine for a demo; if you need run history to
+    # survive redeploys, that needs a paid plan + a disk block here, or an
+    # external Postgres instead of SQLite.
